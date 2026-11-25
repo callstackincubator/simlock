@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { REPO_ROOT } from "./repo-root.js";
 
-// Fails fast with an actionable message instead of a confusing ENOENT from the first
+// why: Fails fast with an actionable message instead of a confusing ENOENT from the first
 // spawned `node dist/cli/main.js` if someone runs `vitest run --project e2e` directly
 // without going through `pnpm run test:e2e` (which builds first).
 const requiredBuildOutputs = [

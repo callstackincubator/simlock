@@ -100,7 +100,7 @@ describe("doctor and drift", () => {
     const stagedDevices: ScriptedObservedDevice[] = [
       { deviceId: deviceA.device.driverDeviceId, runState: "stopped" },
       { deviceId: deviceB.device.driverDeviceId, runState: "stopped" },
-      // deviceC.device.driverDeviceId deliberately omitted.
+      // why: deviceC.device.driverDeviceId deliberately omitted.
       {
         deviceId: deviceD.device.driverDeviceId,
         runState: "running",
@@ -197,7 +197,7 @@ describe("doctor and drift", () => {
 
     const rowsAfterFix = await deviceRows(env);
     const rowA = rowsAfterFix.find((row) => row.id === registryIdOf(deviceA.device.driverDeviceId));
-    // `shutdown` is what --fix commits; the warm pool may already have booted the device back.
+    // why: `shutdown` is what --fix commits; the warm pool may already have booted the device back.
     expect(["shutdown", "ready"], "deviceA must not be left in any other state").toContain(
       rowA?.state,
     );
@@ -243,7 +243,6 @@ describe("doctor and drift", () => {
         "Run `sdkmanager --install emulator`.",
     );
 
-    // Same daemon, no restart: the next run looks again.
     await env.driverScript.set({ android: {} });
     const installed = await env.cli(["doctor"]);
     expect((installed.json as { findings: unknown[] }).findings).toEqual([]);
@@ -269,7 +268,7 @@ describe("doctor and drift", () => {
     expect(reported.code).toBe(0);
     expect(kinds(reported)).toEqual(["orphan-device", "orphan-process"]);
 
-    // ADR 0001 decision 6: `purgeOrphans` is not part of `fix`, so an operator already running
+    // why: ADR 0001 decision 6: `purgeOrphans` is not part of `fix`, so an operator already running
     // `doctor --fix` unattended does not gain a device-destroying behaviour by upgrading. Its
     // own step, asserted on its own: folding the purge into `fix` would still pass the purge
     // steps below. `--yes` too, since the confirmation is not what keeps `--fix` safe.
@@ -278,11 +277,11 @@ describe("doctor and drift", () => {
     expect(fixed.code).toBe(0);
     expect(kinds(fixed)).toEqual(["orphan-device", "orphan-process"]);
     expect(await operations(), "--fix must never destroy a device").not.toContain("destroy");
-    // The purge is the only path that re-proves the root, because it is the only one that
+    // why: The purge is the only path that re-proves the root, because it is the only one that
     // was ever going to destroy anything.
     expect(await operations()).not.toContain("revalidateRoot");
 
-    // No TTY behind the e2e CLI, so `confirm` answers no: the refusal is the documented
+    // why: No TTY behind the e2e CLI, so `confirm` answers no: the refusal is the documented
     // `USAGE`/exit 2 contract `release --all` already has (safety rule 5).
     await env.driverLog.clear();
     const declined = await env.cli(["doctor", "--purge-orphans"]);
@@ -290,7 +289,7 @@ describe("doctor and drift", () => {
     expect(declined.error?.code).toBe("USAGE");
     expect(await operations()).not.toContain("destroy");
 
-    // A root that stopped proving ownership is exactly the case where `listManaged` may be
+    // why: A root that stopped proving ownership is exactly the case where `listManaged` may be
     // describing the user's own devices: the orphans stay reported, and stay on disk.
     await env.driverScript.set({
       ios: {
@@ -308,7 +307,7 @@ describe("doctor and drift", () => {
     await env.driverLog.clear();
     const purged = await env.cli(["doctor", "--purge-orphans", "--yes"]);
     expect(purged.code).toBe(0);
-    // Both findings go: destroying the device covers the process it was running.
+    // why: Both findings go: destroying the device covers the process it was running.
     expect((purged.json as { findings: Finding[] }).findings).toEqual([]);
     expect(
       (await operations()).filter((operation) => operation !== "listManaged"),

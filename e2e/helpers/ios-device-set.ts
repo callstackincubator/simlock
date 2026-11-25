@@ -12,7 +12,6 @@ export interface SimctlDevice {
   readonly state: string;
 }
 
-/** Where a `withDaemon` env's Simlock keeps its iOS devices: its own device set (ADR 0001). */
 export function iosDeviceSet(home: string): string {
   return join(home, "devices", "ios");
 }
@@ -21,7 +20,7 @@ export function iosDeviceSet(home: string): string {
 const SIMCTL_CALL_TIMEOUT_MS = 120_000;
 
 /**
- * `xcrun simctl --set <deviceSet> ...args`. Every simctl call against a Simlock device carries
+ * why: `xcrun simctl --set <deviceSet> ...args`. Every simctl call against a Simlock device carries
  * `--set`, exactly as the driver's do: a device in a custom set is not addressable, or even
  * listable, without it.
  */
@@ -36,13 +35,12 @@ export async function simctlInSet(
 }
 
 /**
- * Per call while emptying a set. Teardown runs inside the e2e `hookTimeout` and stops the
+ * why: Per call while emptying a set. Teardown runs inside the e2e `hookTimeout` and stops the
  * daemon first, so a hung simctl must give up rather than eat the rest of the hook -- the
  * home's removal comes after.
  */
 const EMPTY_SET_CALL_TIMEOUT_MS = 15_000;
 
-/** Devices in one device set. */
 export async function setDevices(
   deviceSet: string,
   options: { readonly timeoutMs?: number } = {},
@@ -53,7 +51,7 @@ export async function setDevices(
 }
 
 /**
- * Everything in the set, by membership rather than by name: the set is Simlock's own, so
+ * why: Everything in the set, by membership rather than by name: the set is Simlock's own, so
  * nothing else can be in it, and CoreSimulator has to be told to forget these devices
  * before the temporary home holding them is removed.
  *
@@ -78,11 +76,11 @@ export async function emptyDeviceSet(deviceSet: string): Promise<void> {
   );
 }
 
-/** Older than any run of a real-simctl lane can be. */
+/** why: Older than any run of a real-simctl lane can be. */
 const STALE_SET_AGE_MS = 60 * 60 * 1000;
 
 /**
- * Device sets left behind by a run that died before its own cleanup -- a killed vitest, a
+ * why: Device sets left behind by a run that died before its own cleanup -- a killed vitest, a
  * crashed machine. Nothing else reclaims them now that the set lives inside a per-test
  * temporary home instead of the shared default set the old prefix sweep covered, so the
  * tens of gigabytes each holds would sit in `$TMPDIR` forever. Age-gated rather than
@@ -113,7 +111,7 @@ export async function runtimeRootProcesses(binary: string): Promise<string[]> {
 }
 
 /**
- * Host processes whose command line names a path inside `deviceSet`. A booted simulator runs a
+ * why: Host processes whose command line names a path inside `deviceSet`. A booted simulator runs a
  * `launchd_sim` (and its children) out of its device directory, so a non-empty result means a
  * simulator of that set is still running -- even after the set's directory is gone, which
  * `simctl --set` alone can no longer see. `$TMPDIR` lives under `/var`, a symlink to

@@ -36,7 +36,6 @@ async function deviceRows(
   return result.json as { id: string; driverDeviceId: string; state: string }[];
 }
 
-/** Starts a `simlock lease` that stays alive, renewing its own lease (ADR 0004 §2). */
 function leaseHolder(
   env: Awaited<ReturnType<typeof withDaemon>>,
   agentId: string,
@@ -69,7 +68,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       device: { driverDeviceId: string };
     };
 
-    // maxRunning (2) has room, but maxDevices (1) does not: a second requester must
+    // why: maxRunning (2) has room, but maxDevices (1) does not: a second requester must
     // still queue, because there is no second device to provision.
     const second = leaseHolder(env, "cap-b");
     await waitFor(() => second.progressEvents().some((event) => isQueuedAt(event, 1)), {
@@ -104,7 +103,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     };
     expect(grantB.device.driverDeviceId).not.toBe(grantA.device.driverDeviceId);
 
-    // `second` still holds `grantB`, and a SIGKILL would leave it standing for the whole
+    // why: `second` still holds `grantB`, and a SIGKILL would leave it standing for the whole
     // TTL (ADR 0004 §3), so it is released explicitly before the processes are torn down.
     await env.cli(["release", grantB.lease.id]);
     first.kill("SIGKILL");
@@ -119,7 +118,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
   it("keeps an idle device of a leased kind out of cleanup and its --dry-run preview, and nuke touches only registry devices", async () => {
     const env = await withDaemon({
       configOverrides: {
-        // Tight on purpose: by the nuke phase this forces a real queued waiter
+        // why: Tight on purpose: by the nuke phase this forces a real queued waiter
         // (see the comment there) without needing a mid-test daemon restart, which
         // would release the still-needed held lease.
         limits: { maxRunning: 1, ios: { maxDevices: 2, maxRunning: 1 } },
@@ -162,7 +161,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       "the kept device of a leased kind is not proposed",
     ).toEqual([]);
 
-    // nuke: force-releases every lease, clears the queue, destroys registry devices,
+    // why: nuke: force-releases every lease, clears the queue, destroys registry devices,
     // and must never touch a device the driver reports but the registry doesn't know
     // about (safety.md: registry-only destruction).
     const heldForNuke = leaseHolder(env, "nuke-held");
@@ -173,8 +172,6 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       label: "a waiter is queued before nuke",
     });
 
-    // Stage an orphan device the fake driver reports but the registry never created,
-    // alongside the current real reality (so nuke's other actions are unaffected).
     const rowsBeforeNuke = await deviceRows(env);
     const stagedRealityDevices: ScriptedObservedDevice[] = [
       ...rowsBeforeNuke

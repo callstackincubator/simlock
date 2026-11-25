@@ -245,7 +245,6 @@ describe("event history", () => {
     }
     expect(existsSync(`${env.logPath}.1`)).toBe(true);
 
-    // The ring holds every event this daemon emitted; the file must hold each of them.
     const ring = await env.cli(["events"]);
     expect(ring.code).toBe(0);
     const emitted = parseLines(ring.stdout);

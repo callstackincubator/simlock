@@ -8,7 +8,6 @@ async function removeCalls(env: TestEnv): Promise<unknown[]> {
     .map((call) => call.arguments);
 }
 
-/** A daemon whose iOS driver has 18.4 on the machine and 19.0 installed by Simlock. */
 async function withSimlockInstall(): Promise<TestEnv> {
   const env = await withDaemon();
   await env.driverScript.set({
@@ -131,7 +130,7 @@ describe("simlock component remove", () => {
   it("refuses an agent session with FORBIDDEN, removing nothing", async () => {
     const env = await withSimlockInstall();
 
-    // A credential the daemon rejects falls back to an agent session (with a notice).
+    // why: A credential the daemon rejects falls back to an agent session (with a notice).
     const result = await env.cli([
       "--token",
       "not-an-admin-credential",

@@ -4,7 +4,7 @@
 export const DEVICE_READY_MS = 330_000;
 
 /**
- * The only timing primitive in this suite: no test or helper may `sleep`/fixed-delay.
+ * why: The only timing primitive in this suite: no test or helper may `sleep`/fixed-delay.
  * Everything that needs "wait until X" polls a predicate through this function.
  */
 export async function waitFor(
@@ -12,7 +12,7 @@ export async function waitFor(
   options: {
     readonly timeout?: number;
     readonly interval?: number;
-    /** Evaluated lazily, only on timeout, so it can report the real last-observed state. */
+    /** why: Evaluated lazily, only on timeout, so it can report the real last-observed state. */
     readonly label?: string | (() => string);
   } = {},
 ): Promise<void> {

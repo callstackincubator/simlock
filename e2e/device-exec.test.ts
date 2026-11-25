@@ -4,27 +4,11 @@ import { describe, expect, it } from "vitest";
 
 import { waitFor, withHttpDaemon, type TestEnv } from "./helpers/index.js";
 
-/**
- * ADR 0005 §19a-§19e, end to end: a remote agent leases a device over HTTP and then drives it
- * over HTTP, with no shell on the daemon's machine and no second network path.
- *
- * This is the flow the operation exists for. Every layer it crosses is exercised for real --
- * the token, the lease, the route, the dispatcher, the driver's own passthrough resolution,
- * and a genuine child process on the daemon side -- so what it proves that the unit suites
- * cannot is that the scoping, the streamed chunks, the exit code and the authorization all
- * survive the whole trip. The fake driver's passthrough resolves to a node one-liner that
- * prints its argv and honours `--fake-exec-stderr=`, `--fake-exec-exit=` and
- * `--fake-exec-echo-stdin`, which is how a command's second stream, a non-zero exit and its
- * stdin are observable from the far end of an HTTP request.
- */
-
 interface SseFrame {
   readonly event: string;
   readonly data: unknown;
 }
 
-/** Reads the whole SSE body, skipping keepalive comments. The stream is finite here: the route
- * ends it on the terminal `exit`/`error` event. */
 async function readSse(response: Response): Promise<SseFrame[]> {
   const body = await response.text();
   const frames: SseFrame[] = [];
@@ -54,8 +38,6 @@ interface Fleet {
   ): Promise<Response>;
 }
 
-/** One daemon with HTTP on, both fake platforms scripted, and the three calls every flow here
- * makes. Factored out so each test reads as the thing it is proving rather than as setup. */
 async function fleet(): Promise<Fleet> {
   const { env, port } = await withHttpDaemon((port) => ({
     configOverrides: {
@@ -170,8 +152,6 @@ describe("device.exec over HTTP", () => {
 
     const frames = await readSse(response);
     expect(frames.at(-1)).toEqual({ data: { exitCode: 3 }, event: "exit" });
-    // The daemon ran the command the *driver* resolved, not the one the client sent: the
-    // device root is prepended and the driver's environment reached the child's own process.
     expect(JSON.parse(chunksOf(frames, "stdout"))).toEqual({
       argv: ["/fake/ios", "list", "devices", "--fake-exec-stderr=a warning", "--fake-exec-exit=3"],
       cwd: expect.any(String),
@@ -179,8 +159,6 @@ describe("device.exec over HTTP", () => {
     });
     expect(chunksOf(frames, "stderr")).toBe("a warning");
 
-    // `stdin` travels with the request, is written once, and the pipe is then closed -- so a
-    // command that reads it sees exactly this and then EOF.
     const echoed = await exec(
       leaseId,
       { args: ["list", "--fake-exec-echo-stdin"], stdin: "piped payload", tool: "simctl" },
@@ -284,7 +262,7 @@ describe("device.exec over HTTP", () => {
   });
 
   it("refuses through the fake driver's own mirrored list, and never runs what it refuses", async () => {
-    // The fake driver's refusal rules are its own mirror of the real Android/iOS drivers'
+    // why: The fake driver's refusal rules are its own mirror of the real Android/iOS drivers'
     // (see `e2e/fake-driver/fake-driver.ts`'s own comment on `passthrough`), kept deliberately
     // small and script-free so the wiring below is exercised the same way on every run. What
     // this proves is that `device.exec` reaches a driver's refusal list *at all*, through both
@@ -295,19 +273,18 @@ describe("device.exec over HTTP", () => {
     const auth = await token("agent");
     const leaseId = await lease({ device: "Pixel 8", platform: "android" }, auth);
 
-    // A verb the driver will not proxy is `PASSTHROUGH_REFUSED` here exactly as it is for the
+    // why: A verb the driver will not proxy is `PASSTHROUGH_REFUSED` here exactly as it is for the
     // local wrapper: the exec route is not a way around the refusal list.
     const refusedVerb = await exec(leaseId, { args: ["kill-server"], tool: "adb" }, auth);
     expect(refusedVerb.status).toBe(422);
     expect(await errorCodeOf(refusedVerb)).toBe("PASSTHROUGH_REFUSED");
 
-    // The one refusal particular to this path: an interactive shell with no terminal to attach
+    // why: The one refusal particular to this path: an interactive shell with no terminal to attach
     // it to, refused rather than left to stall until `exec.timeoutMs`.
     const bareShell = await exec(leaseId, { args: ["shell"], tool: "adb" }, auth);
     expect(bareShell.status).toBe(422);
     expect(await errorCodeOf(bareShell)).toBe("PASSTHROUGH_REFUSED");
 
-    // The same command with something to run is not the interactive shell, and goes through.
     const shellWithCommand = await exec(leaseId, { args: ["shell", "getprop"], tool: "adb" }, auth);
     expect(shellWithCommand.status).toBe(200);
     expect((await readSse(shellWithCommand)).at(-1)).toEqual({
@@ -315,8 +292,6 @@ describe("device.exec over HTTP", () => {
       event: "exit",
     });
 
-    // A tool no driver on this machine wraps is a request this host cannot serve, not a
-    // malformed one.
     const unwrapped = await exec(leaseId, { args: [], tool: "bash" }, auth);
     expect(unwrapped.status).toBe(422);
     expect(await errorCodeOf(unwrapped)).toBe("UNKNOWN_PASSTHROUGH_TOOL");
@@ -325,9 +300,6 @@ describe("device.exec over HTTP", () => {
   });
 
   it("checks ownership per role: an agent's own lease, and an operator that must name its holder", async () => {
-    // ADR 0005 §19a': an agent is gated the ordinary way and may not name a requester at all;
-    // an operator does *not* get the usual bypass on this operation and must name the one the
-    // lease was granted to.
     const { env, exec, lease, token } = await fleet();
     const auth = await token("agent");
     const otherAuth = await token("agent");
@@ -342,7 +314,7 @@ describe("device.exec over HTTP", () => {
     expect(someoneElses.status).toBe(403);
     expect(await errorCodeOf(someoneElses)).toBe("FORBIDDEN");
 
-    // An agent that names *any* requester is refused outright: identity here is the token's,
+    // why: An agent that names *any* requester is refused outright: identity here is the token's,
     // and answering as if the field had not been sent would read like it was honoured.
     const agentNaming = await exec(
       leaseId,

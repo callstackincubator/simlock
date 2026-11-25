@@ -20,9 +20,7 @@ export interface McpClientOptions {
 
 export interface McpClientHandle {
   readonly client: Client;
-  /** `notifications/progress` frames received so far, in order. */
   progressNotifications(): readonly ProgressNotification["params"][];
-  /** `notifications/message` (logging) frames received so far, in order. */
   loggingNotifications(): readonly LoggingMessageNotification["params"][];
   waitForNotification<T>(
     predicate: (
@@ -33,7 +31,7 @@ export interface McpClientHandle {
     timeout?: number,
   ): Promise<T>;
   /**
-   * The `simlock mcp` subprocess's stderr captured so far. Piped (not inherited) so a
+   * why: The `simlock mcp` subprocess's stderr captured so far. Piped (not inherited) so a
    * subprocess shutdown quirk (see the flow-2 report note on a stack-overflow logged
    * during teardown) does not spam the test runner's own output; available here for
    * a test that needs to inspect it.
@@ -42,11 +40,6 @@ export interface McpClientHandle {
   close(): Promise<void>;
 }
 
-/**
- * Spawns `node dist/cli/main.js mcp` and connects a real SDK `Client` over stdio,
- * with progress/logging notification sinks pre-wired so tests can assert MCP
- * framing in one place instead of re-registering handlers per test.
- */
 export async function mcpClient(
   env: NodeJS.ProcessEnv,
   options: McpClientOptions = {},
@@ -60,11 +53,11 @@ export async function mcpClient(
       ...(options.local === true ? ["--local"] : []),
       "mcp",
     ],
-    // StdioClientTransport only inherits a safe-listed subset of process.env by
+    // why: StdioClientTransport only inherits a safe-listed subset of process.env by
     // default (DEFAULT_INHERITED_ENV_VARS) -- explicit here so SIMLOCK_HOME /
     // SIMLOCK_DRIVERS_MODULE / SIMLOCK_AGENT_ID actually reach the spawned process.
     env: toStringEnv({ ...env, ...options.env }),
-    // Piped (not the default "inherit") so a subprocess shutdown quirk doesn't spam
+    // why: Piped (not the default "inherit") so a subprocess shutdown quirk doesn't spam
     // the test runner's own stderr; captured instead, see `stderrOutput()`.
     stderr: "pipe",
   });
@@ -110,7 +103,7 @@ export async function mcpClient(
     loggingNotifications: () => [...logging],
     stderrOutput: () => stderrOutput,
     waitForNotification(predicate, timeout = 30_000) {
-      // Check what has already arrived first -- a notification can beat the caller
+      // why: Check what has already arrived first -- a notification can beat the caller
       // to `waitForNotification` (e.g. the action that triggers it and the call to
       // this method are two separate awaits), and only dispatching to *future*
       // arrivals would make that a race instead of a wait.
@@ -138,7 +131,7 @@ export async function mcpClient(
       });
     },
     async close() {
-      // Idempotent: both a test's own cleanup and TestEnv's teardown safety net may
+      // why: Idempotent: both a test's own cleanup and TestEnv's teardown safety net may
       // call this on the same handle.
       if (closed) return;
       closed = true;

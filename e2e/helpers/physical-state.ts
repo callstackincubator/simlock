@@ -2,27 +2,21 @@ import type { TestEnv } from "./env.js";
 import { openSeedDatabase } from "./state-db.js";
 import { waitFor } from "./wait.js";
 
-/** The one iPhone every physical-device flow enrols: an iPhone 15 Pro on iOS 18.4, class phone. */
 export const PHYSICAL_MODEL = "iPhone 15 Pro";
 export const PHYSICAL_OS = "18.4";
 
-/** The principal the seeded leases belong to; pass it to `withDaemon` as `agentId`. */
 export const PHYSICAL_AGENT = "physical-agent";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface PhysicalSeed {
-  /** The registry id, `dev_<name>`. */
   readonly id: string;
-  /** The ID the driver would know it by; a physical UDID in real life. */
   readonly driverDeviceId: string;
   readonly state: "ready" | "leased" | "reclaiming" | "quarantined";
-  /** Defaults to a day ago for a `reclaiming` record and to an hour ago otherwise. */
   readonly lastLeaseEndedAt?: number;
   readonly enrolledApps?: readonly string[];
 }
 
-/** A shut-down simulator in the registry's own `devices` list, beside the physical records. */
 export interface ShutdownSimulatorSeed {
   readonly id: string;
   readonly driverDeviceId: string;
@@ -31,11 +25,9 @@ export interface ShutdownSimulatorSeed {
 export interface SeededLease {
   readonly id: string;
   readonly deviceId: string;
-  /** Milliseconds from now; negative is a deadline that passed before the daemon started. */
   readonly deadlineInMs: number;
 }
 
-/** A ready, a leased and a reclaiming physical record, and the lease on the leased one. */
 export const READY: PhysicalSeed = {
   driverDeviceId: "00008110-00000000READY1",
   id: "dev_pready",
@@ -134,7 +126,6 @@ export async function seedPhysicalState(
   }
 }
 
-/** The fake driver's operations on calls whose arguments name any of these driver device IDs. */
 export async function callsNaming(
   env: Pick<TestEnv, "driverLog">,
   ...driverDeviceIds: readonly string[]
@@ -144,10 +135,6 @@ export async function callsNaming(
     .map((call) => call.operation);
 }
 
-/**
- * Runs `check` every 100 ms for `forMs`, so a test can assert that something did not happen. The
- * first failed check ends the observation and is rethrown.
- */
 export async function observeFor(forMs: number, check: () => Promise<void>): Promise<void> {
   const until = Date.now() + forMs;
   let failure: unknown;

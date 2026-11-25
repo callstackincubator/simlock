@@ -26,11 +26,6 @@ async function listLeases(env: TestEnv): Promise<LeaseRecord[]> {
   return result.json as LeaseRecord[];
 }
 
-/**
- * Polls `simlock list --devices` until the device identified by `driverDeviceId`
- * (the driver-opaque id -- what a lease grant reports as `udid`/`device_id`, *not*
- * simlock's own registry device id) reaches `state`.
- */
 export async function waitForDeviceState(
   env: TestEnv,
   driverDeviceId: string,
@@ -49,7 +44,6 @@ export async function waitForDeviceState(
   );
 }
 
-/** Polls `simlock list --leases` until exactly `count` leases are active. */
 export async function waitForLeaseCount(
   env: TestEnv,
   count: number,

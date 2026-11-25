@@ -4,12 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { waitFor, withDaemon, withHttpDaemon, type TestEnv } from "./helpers/index.js";
 
-/**
- * What `daemon.log` records, read back from the file a real daemon wrote: one `operation` line
- * per call that changes state, a line per handled background failure, and at `debug` the read
- * calls and every device command.
- */
-
 interface LogLine {
   readonly level: string;
   readonly module: string;
@@ -94,7 +88,7 @@ describe("daemon.log", () => {
       },
       { label: "HTTP accepting connections" },
     );
-    // `device.exec` is for the lease's own holder, so the lease is taken with the same token.
+    // why: `device.exec` is for the lease's own holder, so the lease is taken with the same token.
     const created = await env.cli(["token", "create", "--role", "agent"]);
     const auth = {
       authorization: `Bearer ${(created.json as { secret: string }).secret}`,
@@ -150,7 +144,6 @@ describe("daemon.log", () => {
         fields: expect.objectContaining({ code: 4, durationMs: expect.any(Number) }),
       }),
     ]);
-    // The child prints its own argv as JSON; that output never reaches the log.
     const raw = await readFile(env.logPath, "utf8");
     expect(raw).not.toContain('"argv"');
     await env.cli(["release", leaseId]);
@@ -183,7 +176,7 @@ describe("daemon.log", () => {
       label: "the follower printed the existing tail",
     });
 
-    // Each cycle writes about 1 kB, so five of them rotate the log several times. A cycle waits
+    // why: Each cycle writes about 1 kB, so five of them rotate the log several times. A cycle waits
     // for the follower before the next one: only one rotated generation is kept, so a second
     // rotation inside one poll would delete lines before any reader could see them.
     let lastLeaseId = "";
@@ -196,8 +189,6 @@ describe("daemon.log", () => {
       });
     }
 
-    // The log has rotated, and the last release line -- already printed above -- sits in the
-    // file started by a rotation, so it was written after one.
     await expect(readFile(`${env.logPath}.1`, "utf8")).resolves.not.toBe("");
     const current = await readFile(env.logPath, "utf8");
     expect(current).toContain(`"leaseId":"${lastLeaseId}"`);

@@ -18,7 +18,7 @@ describe("lease-triggered component installs", () => {
       ios: {
         availableOsVersions: ["18.4"],
         knownModels: ["iPhone 16"],
-        // Long enough that the second request surely arrives while the first install runs.
+        // why: Long enough that the second request surely arrives while the first install runs.
         latencyMs: { installComponent: 3_000 },
       },
     });
@@ -68,7 +68,6 @@ describe("lease-triggered component installs", () => {
       { component: "19.0", push: "progress", stage: "downloading", waiting: false },
       { component: "19.0", percent: 20, push: "progress", stage: "downloading", waiting: false },
       { component: "19.0", percent: 60, push: "progress", stage: "downloading", waiting: false },
-      // The install succeeded: its final report.
       { component: "19.0", percent: 100, push: "progress", stage: "downloading", waiting: false },
     ]);
     const lastDownloading = stages.findLastIndex((line) => line["stage"] === "downloading");
@@ -141,7 +140,6 @@ describe("lease-triggered component installs", () => {
   });
 });
 
-/** The CLI's `progress` lines on stderr, parsed; other stderr lines are left out. */
 function progressLines(result: CliResult): Record<string, unknown>[] {
   return result.stderr
     .split("\n")
@@ -150,7 +148,6 @@ function progressLines(result: CliResult): Record<string, unknown>[] {
     .filter((line) => line["push"] === "progress");
 }
 
-/** Every stderr line the CLI wrote, parsed. */
 function stderrLines(result: CliResult): unknown[] {
   return result.stderr
     .trim()
@@ -215,7 +212,7 @@ describe("simlock component install", () => {
     const env = await withDaemon();
     await env.driverLog.clear();
 
-    // A credential the daemon rejects falls back to an agent session (with a notice).
+    // why: A credential the daemon rejects falls back to an agent session (with a notice).
     const result = await env.cli([
       "--token",
       "not-an-admin-credential",
@@ -236,7 +233,6 @@ interface SseFrame {
   readonly data: unknown;
 }
 
-/** The whole SSE body, keepalives skipped. The route ends it on its `result` or `error` event. */
 async function readSse(response: Response): Promise<SseFrame[]> {
   const frames: SseFrame[] = [];
   for (const raw of (await response.text()).split("\n\n")) {
@@ -311,10 +307,8 @@ describe("POST /v1/components/install", () => {
     });
     expect(response.status).toBe(200);
     expect(await readSse(response)).toEqual([
-      // The install's start, before the driver's own percentage.
       { data: { stage: "downloading" }, event: "progress" },
       { data: { fraction: 0.41, stage: "downloading" }, event: "progress" },
-      // The install succeeded: its final report, before the result.
       { data: { fraction: 1, stage: "downloading" }, event: "progress" },
       {
         data: { component: "35", outcome: "installed", platform: "android", version: "35" },
@@ -345,9 +339,7 @@ describe("POST /v1/components/install", () => {
 
     const repeat = await install(operator, { platform: "android", version: "35" });
     expect(await readSse(repeat)).toEqual([
-      // Joining a running install, it hears that install's latest progress at once.
       { data: { stage: "downloading" }, event: "progress" },
-      // The install succeeded: its final report, before the result.
       { data: { fraction: 1, stage: "downloading" }, event: "progress" },
       {
         data: { component: "35", outcome: "installed", platform: "android", version: "35" },

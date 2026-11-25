@@ -3,19 +3,14 @@ import { dirname } from "node:path";
 
 import type { FakeDriverLogEntry, FakeDriverScript } from "../fake-driver/types.js";
 
-/** Mutates the fake driver's JSON script file; the daemon re-reads it on every call. */
 export interface DriverScriptControl {
-  /** Replaces the whole script (both platforms). */
   set(script: FakeDriverScript): Promise<void>;
-  /** Shallow-merges into whichever platform keys are present, leaving others untouched. */
   merge(script: FakeDriverScript): Promise<void>;
-  /** Deletes the script file so the driver falls back to defaults. */
   clear(): Promise<void>;
   get(): Promise<FakeDriverScript>;
   readonly path: string;
 }
 
-/** Reads the fake driver's append-only JSON-lines call log. */
 export interface DriverLogControl {
   calls(): Promise<FakeDriverLogEntry[]>;
   clear(): Promise<void>;
