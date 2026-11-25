@@ -18,7 +18,7 @@ What both drivers keep:
 - **Scope every command to the root.** Ownership is membership in the root, never a name prefix. iOS only: under `drivers.ios.deviceSet: "default"` (ADR 0048) simulators stay in Xcode's set with no owned root, and a device is this instance's only when its durable mark names the instance id.
 - **Opaque to core.** `address`, `driverData`, `deviceRoot`, `drivers.<platform>.*` and the keys a driver's definition file declares under `ios.*` or `android.*` are carried unread.
 - A driver's `DeviceDataTable` is built without a driver instance, so a device loads where its driver is refused; `productionDeviceDataTables` (`daemon/driver-discovery.ts`) passes both tables on every host.
-- A driver imports only core and ports: never the bus, the contract, leasing, the gateway or the daemon. No lint rule holds this.
+- A driver imports only core, ports and `shared`: never the bus, the contract, leasing, the gateway or the daemon. No lint rule holds this.
 - **Facts reach the bus through callbacks.** `daemon/driver-discovery.ts` bridges a driver's constructor callbacks to an event or to the logger.
 - **Prerequisites** (`iosPrerequisites`, `androidPrerequisites`) are no `Driver` method: they are built even when the driver did not start, and only `doctor` runs them.
 - **Passthrough.** The driver owns the scoping flags and the refused verbs (`PassthroughRefusedError`). With a device (`device.exec`) it also fills the lease's device in and refuses a command naming another, through `other-device-refusal.ts` (ADR 0047). `hasTerminal: false` means `device.exec`: refuse what needs a tty.
