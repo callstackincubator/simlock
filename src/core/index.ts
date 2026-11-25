@@ -85,6 +85,7 @@ export {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type DriverSettleResult,
   type DriverSource,
   type DriverRejection,
   type DriverToolVersion,

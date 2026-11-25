@@ -223,6 +223,7 @@ async function discoverIosDriver(
         });
       },
       processRunner: options.processRunner,
+      ...(options.processTable === undefined ? {} : { processTable: options.processTable }),
       simlockHome: options.simlockHome,
       tcpListener: new NodeTcpListenerFactory(),
       tcpProbe: options.tcpProbe,

@@ -40,9 +40,13 @@ export const iosSourceDataOwner: SqliteSchemaOwner = {
        kind TEXT NOT NULL CHECK (kind IN ('link', 'file', 'unreadable')),
        PRIMARY KEY (source_id, relative_path)
      ) STRICT;`,
+    // why: ADR 0090: the plain leases copied from a seed, whether it is a settled copy, and, on the row of a settle or of the quick seed it retires, the seed the settle replaces or was replaced by.
+    `ALTER TABLE ios_source_data ADD COLUMN lease_count INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE ios_source_data ADD COLUMN settled INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE ios_source_data ADD COLUMN settle_of TEXT;`,
   ],
   name: "ios-source-data",
-  version: 4,
+  version: 5,
 };
 
 export interface NewSourceRow {
@@ -57,11 +61,16 @@ export interface NewSourceRow {
   readonly osVersion: string;
   readonly maker: string;
   readonly createdAt: number;
+  /** why: the quick seed a settle replaces; set on the row of a settle only. */
+  readonly settleOf?: string;
 }
 
 export interface SourceRow {
   readonly sourceId: string;
   readonly kind: "seed" | "baseline";
+  readonly specKey: string;
+  readonly settled: boolean;
+  readonly leaseCount: number;
   readonly udid: string | undefined;
   readonly throwawayUdid: string | undefined;
   readonly deviceTypeId: string;
@@ -107,8 +116,8 @@ export class IosSourceTable {
     this.#database
       .prepare(
         `INSERT INTO ios_source_data (source_id, kind, spec_key, set_path, device_type_id, runtime_id,
-           runtime_build, model, os_version, state, maker, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'making', ?, ?)`,
+           runtime_build, model, os_version, state, maker, created_at, settle_of)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'making', ?, ?, ?)`,
       )
       .run(
         row.sourceId,
@@ -122,6 +131,7 @@ export class IosSourceTable {
         row.osVersion,
         row.maker,
         row.createdAt,
+        row.settleOf ?? null,
       );
   }
 
@@ -129,6 +139,13 @@ export class IosSourceTable {
     this.#database
       .prepare("UPDATE ios_source_data SET udid = ? WHERE source_id = ?")
       .run(udid, sourceId);
+  }
+
+  /** why: one statement, so two leases at once both count. */
+  addLease(sourceId: string): void {
+    this.#database
+      .prepare("UPDATE ios_source_data SET lease_count = lease_count + 1 WHERE source_id = ?")
+      .run(sourceId);
   }
 
   setThrowaway(sourceId: string, udid: string): void {
@@ -139,22 +156,26 @@ export class IosSourceTable {
 
   markReady(sourceId: string, sizeBytes: number | undefined, record: SourceRecord): void {
     inTransaction(this.#database, () => {
-      this.#database
-        .prepare(
-          `UPDATE ios_source_data SET state = 'ready', size_bytes = ?, lineage = ?, saved_without_lineage = ?
-           WHERE source_id = ?`,
-        )
-        .run(
-          sizeBytes ?? null,
-          record.lineage === undefined ? null : JSON.stringify(record.lineage),
-          record.savedWithoutLineage === true ? 1 : 0,
-          sourceId,
-        );
-      const insert = this.#database.prepare(
-        "INSERT INTO ios_source_files (source_id, relative_path, kind) VALUES (?, ?, ?)",
-      );
-      for (const file of record.files) insert.run(sourceId, file.relativePath, file.kind);
+      this.#writeReady(sourceId, sizeBytes, record);
     });
+  }
+
+  #writeReady(sourceId: string, sizeBytes: number | undefined, record: SourceRecord): void {
+    this.#database
+      .prepare(
+        `UPDATE ios_source_data SET state = 'ready', size_bytes = ?, lineage = ?, saved_without_lineage = ?
+         WHERE source_id = ?`,
+      )
+      .run(
+        sizeBytes ?? null,
+        record.lineage === undefined ? null : JSON.stringify(record.lineage),
+        record.savedWithoutLineage === true ? 1 : 0,
+        sourceId,
+      );
+    const insert = this.#database.prepare(
+      "INSERT INTO ios_source_files (source_id, relative_path, kind) VALUES (?, ?, ?)",
+    );
+    for (const file of record.files) insert.run(sourceId, file.relativePath, file.kind);
   }
 
   filesOf(sourceId: string): readonly SourceFile[] {
@@ -165,6 +186,28 @@ export class IosSourceTable {
         relativePath: row["relative_path"] as string,
         kind: row["kind"] as SourceFile["kind"],
       }));
+  }
+
+  /** why: ADR 0090 §3: one transaction, so a reader sees the quick seed or the settled one as the kind's ready seed, never both and never neither. */
+  promoteSettled(
+    settleId: string,
+    retiredId: string,
+    sizeBytes: number | undefined,
+    record: SourceRecord,
+  ): void {
+    inTransaction(this.#database, () => {
+      this.#database
+        .prepare(
+          "UPDATE ios_source_data SET state = 'making', settle_of = ?, throwaway_udid = (SELECT throwaway_udid FROM ios_source_data WHERE source_id = ?) WHERE source_id = ?",
+        )
+        .run(settleId, settleId, retiredId);
+      this.#database
+        .prepare(
+          "UPDATE ios_source_data SET settled = 1, settle_of = NULL, throwaway_udid = NULL WHERE source_id = ?",
+        )
+        .run(settleId);
+      this.#writeReady(settleId, sizeBytes, record);
+    });
   }
 
   deleteRow(sourceId: string): void {
@@ -198,11 +241,16 @@ export class IosSourceTable {
     specKey: string,
     createdBefore: number,
   ): readonly SourceRow[] {
-    return this.#rows("WHERE state = 'making' AND maker = ? AND spec_key = ? AND created_at < ?", [
-      maker,
-      specKey,
-      createdBefore,
-    ]);
+    // why: a settle, or the quick seed it retires, runs far longer than a make; only a restart sweeps it.
+    return this.#rows(
+      "WHERE state = 'making' AND settle_of IS NULL AND maker = ? AND spec_key = ? AND created_at < ?",
+      [maker, specKey, createdBefore],
+    );
+  }
+
+  /** why: a settle's row and the row of the quick seed it retires, which no make sweeps. */
+  settleRows(): readonly SourceRow[] {
+    return this.#rows("WHERE state = 'making' AND settle_of IS NOT NULL", []);
   }
 
   makingThrowaways(): readonly string[] {
@@ -232,13 +280,16 @@ export class IosSourceTable {
   #rows(where: string, parameters: readonly (string | number)[]): readonly SourceRow[] {
     return this.#database
       .prepare(
-        `SELECT source_id, kind, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
+        `SELECT source_id, kind, spec_key, settled, lease_count, udid, throwaway_udid, device_type_id, runtime_id, runtime_build, model, os_version,
            state, maker, size_bytes, lineage, saved_without_lineage FROM ios_source_data ${where}`,
       )
       .all(...parameters)
       .map((row) => ({
         sourceId: row["source_id"] as string,
         kind: row["kind"] as "seed" | "baseline",
+        specKey: row["spec_key"] as string,
+        settled: row["settled"] === 1,
+        leaseCount: row["lease_count"] as number,
         udid: (row["udid"] as string | null) ?? undefined,
         throwawayUdid: (row["throwaway_udid"] as string | null) ?? undefined,
         deviceTypeId: row["device_type_id"] as string,
