@@ -979,6 +979,7 @@ describe("the error-message unwrap outside src/shared/", () => {
       errorMessageCopies(
         [
           "const one = e instanceof Error ? e.message : String(e);",
+          "const dotted = r.error instanceof Error ? r.error.message : String(r.error);",
           "const split = e instanceof Error\n  ? e.message\n  : String(e);",
           "const inside = `failed: ${e instanceof Error ? e.message : String(e)}`;",
           ["function", "errorMessage(error: unknown): string { return ''; }"].join(" "),
@@ -987,7 +988,7 @@ describe("the error-message unwrap outside src/shared/", () => {
           "const other = e instanceof Error ? e.stack : String(e);",
         ].join("\n"),
       ),
-    ).toBe(4);
+    ).toBe(5);
     const sources = spawnSync("git", ["ls-files", "src/*.ts", "src/*.tsx"], {
       cwd: repoRoot,
       encoding: "utf8",
