@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { FakeClock } from "../ports/index.js";
 import { runCli } from "./index.js";
-import { fakeClient, outputCapture } from "./test-index.js";
+import { fakeClient, outputCapture, settle } from "./test-index.js";
+import { SimlockError } from "../contract/index.js";
 
 const CATEGORIES = [
   "mdm",
@@ -165,28 +167,80 @@ describe("simlock lease: the slim hint line", () => {
       lines: [],
       catalogReads: 0,
     },
-  ];
+    {
+      name: "catalog read rejects: no line, grant and exit code as today",
+      catalog: iosCatalog(CATEGORIES),
+      read: "reject",
+      grant,
+      flags: [],
+      lines: [],
+      catalogReads: 1,
+    },
+    {
+      name: "catalog unanswered past 2 s on the fake clock: no line, the command goes on",
+      catalog: iosCatalog(CATEGORIES),
+      read: "hang",
+      grant,
+      flags: [],
+      lines: [],
+      catalogReads: 1,
+    },
+    {
+      name: "--export-env: export lines on stdout, notice on stderr",
+      catalog: iosCatalog(CATEGORIES),
+      grant: { ...grant, environment: { SIMLOCK_DEVICE: "dev_1" } },
+      flags: ["--export-env"],
+      lines: [hintFor(CATEGORIES)],
+      catalogReads: 1,
+      stdout: "export SIMLOCK_DEVICE='dev_1'\n",
+    },
+  ] as {
+    name: string;
+    catalog: ReturnType<typeof iosCatalog>;
+    read?: "reject" | "hang";
+    grant: unknown;
+    flags: string[];
+    lines: string[];
+    catalogReads: number;
+    stdout?: string;
+  }[];
 
   it("prints one stderr notice naming the slim categories a slim iOS lease has off, and none otherwise", async () => {
     for (const row of rows) {
       const output = outputCapture();
       let catalogReads = 0;
-      const exitCode = await runCli(
+      const environment = output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            getCatalog: () => {
+              catalogReads += 1;
+              if (row.read === "reject") {
+                return Promise.reject(new SimlockError("INTERNAL", "domain", "catalog failed", {}));
+              }
+              if (row.read === "hang") return new Promise(() => undefined);
+              return Promise.resolve(row.catalog);
+            },
+            requestLease: () => Promise.resolve(row.grant as never),
+          }),
+      });
+      let settled = false;
+      const run = runCli(
         ["lease", "--platform", "ios", "--detach", ...row.flags],
-        output.environmentWith({
-          connectAdmin: async () =>
-            fakeClient({
-              getCatalog: () => {
-                catalogReads += 1;
-                return Promise.resolve(row.catalog);
-              },
-              requestLease: () => Promise.resolve(row.grant as never),
-            }),
-        }),
-      );
+        environment,
+      ).then((code) => {
+        settled = true;
+        return code;
+      });
+      for (let tick = 0; tick < 20 && !settled; tick += 1) {
+        await settle();
+        (environment.clock as FakeClock).advance(500);
+      }
+      expect(settled, `${row.name}: the command had not ended by 10 s`).toBe(true);
+      const exitCode = await run;
       expect(exitCode, row.name).toBe(0);
       expect(hintLines(output.stderr), row.name).toEqual(row.lines);
       expect(catalogReads, row.name).toBe(row.catalogReads);
+      if (row.stdout !== undefined) expect(output.stdout, row.name).toBe(row.stdout);
     }
   });
 });
