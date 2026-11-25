@@ -433,6 +433,15 @@ describe("Dispatcher: seed.make", () => {
       options: { driverOptions: { knownModels: ["iPhone 17"] } },
     },
     {
+      code: "RUNTIME_MISSING",
+      failure: new RuntimeMissingError("android", "default", { downloadable: false }),
+      input: { model: "Pixel 9", platform: "android" },
+      label: "an Android default with no system image installed, as the Android driver refuses it",
+      message:
+        "no installed Android runtime fits the default; install one with simlock component install android and a version",
+      options: { driverOptions: { knownModels: ["Pixel 9"], platform: "android" as const } },
+    },
+    {
       code: "BAD_REQUEST",
       failure: new UnsupportedRequestOptionError("ios", "imageTag"),
       input: { imageTag: "google_apis", model: "iPhone 17", platform: "ios" },

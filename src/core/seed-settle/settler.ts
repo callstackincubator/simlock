@@ -335,7 +335,7 @@ class SeedSettlerImpl implements SeedSettler {
     });
     if (!started) {
       this.#operators.unshift(entry);
-      // why: the check runs every 15 s, so a refused reservation is told once per wait, like every other wait.
+      // why: a refused reservation is told once per wait, like every other wait.
       entry.lastWaiting = "capacity";
       if (waitedFor !== "capacity") entry.onProgress({ reason: "capacity", stage: "waiting" });
     }

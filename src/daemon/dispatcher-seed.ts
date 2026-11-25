@@ -34,7 +34,7 @@ export class SeedHandlers {
       })
       .catch((error: unknown) => {
         if (!(error instanceof RuntimeMissingError)) throw error;
-        throw runtimeMissing(error, input.osVersion);
+        throw runtimeMissing(error, input.osVersion, input.imageTag);
       });
     const kind: SeedKind = {
       model: spec.model,
@@ -62,11 +62,17 @@ export class SeedHandlers {
 
 /**
  * why: `seed.make` never downloads, so the lease's "pass --allow-download" is no advice here; it names the command that installs the runtime (ADR 0090 §4).
- * A refusal no download could fix for an exact version or the default (below iOS 16, out of range, an image tag) keeps the lease's own words, because that command would fail for it.
+ * A refusal no download could fix for an exact version (below iOS 16, out of range) or an image tag keeps the lease's own words, because that command would fail for it.
  */
-function runtimeMissing(error: RuntimeMissingError, osVersion: string | undefined): DispatchError {
+function runtimeMissing(
+  error: RuntimeMissingError,
+  osVersion: string | undefined,
+  imageTag: string | undefined,
+): DispatchError {
   const asked = askedVersion(osVersion);
-  const advice = error.downloadable || asked.kind === "range";
+  // why: the Android driver never marks a default request downloadable, yet a runtime installed by version fixes it, unless an image tag is what no image fits.
+  const defaultFixable = osVersion === undefined && imageTag === undefined;
+  const advice = error.downloadable || asked.kind === "range" || defaultFixable;
   return new DispatchError(
     "RUNTIME_MISSING",
     advice ? installAdvice(error, asked, osVersion) : error.message,
