@@ -91,6 +91,29 @@ describe("optional modules: turning on", () => {
   });
 });
 
+describe("optional modules: worker tags", () => {
+  it("a lease whose requires names a tag is granted, and one naming a name no source has, or a module that is off, is CAPABILITY_MISSING naming only the missing names", async () => {
+    const { daemon } = await start({
+      modules: definitions(fakeModule({ name: "stream" })),
+      overrides: { tags: ["bank-network"] },
+    });
+    const request = (requires: readonly string[]) =>
+      daemon.dispatch("lease.request", { ...ios, requires: [...requires] }, agent);
+
+    const grant = (await request(["bank-network"])) as { lease: { id: string } };
+    await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+
+    await expect(request(["vpn-eu"])).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      message: "This worker cannot serve vpn-eu",
+    });
+    await expect(request(["bank-network", "stream"])).rejects.toMatchObject({
+      code: "CAPABILITY_MISSING",
+      message: "This worker cannot serve stream",
+    });
+  });
+});
+
 describe("optional modules: HTTP routes", () => {
   const handler = (request: Request, identity: { readonly role: string }) =>
     Promise.resolve(Response.json({ path: new URL(request.url).pathname, role: identity.role }));
