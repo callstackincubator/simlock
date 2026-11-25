@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { VirtualDevice } from "../domain.js";
-import { device, fakeMemoryPressure, harness, iosListing, iphone15, now } from "./test-fixtures.js";
+import {
+  device,
+  fakeMemoryPressure,
+  harness,
+  iosListing,
+  iphone15,
+  neverLeased,
+  now,
+  waiter,
+} from "./test-fixtures.js";
 
 type Rig = ReturnType<typeof harness>;
 
@@ -117,6 +126,78 @@ describe("warm pool refill delay", () => {
       expect(started(rig), `${name}: the timer's pass at ${at} ms`).toBeGreaterThan(0);
       rig.pool.dispose();
     }
+  });
+
+  it("during the wait a waiting request's boot and creation and the plan's over-budget and never-leased-idle shutdowns run at once", async () => {
+    const spec = device("s1", "shutdown", 0).spec;
+    const cases: readonly {
+      name: string;
+      devices: readonly VirtualDevice[];
+      options: Parameters<typeof harness>[1];
+      done: (rig: Rig) => boolean;
+    }[] = [
+      {
+        name: "a waiting-request boot",
+        devices: [device("l1", "leased", 0), device("s1", "shutdown", 0)],
+        options: { waiting: () => [waiter(spec)] },
+        done: (rig) => rig.bootCalls.join() === "s1",
+      },
+      {
+        name: "a waiting-request creation",
+        devices: [device("l1", "leased", 0)],
+        options: {
+          maxConcurrentBoots: 2,
+          waiting: () => [waiter(spec, true), waiter({ ...spec, model: "iPhone 16" })],
+        },
+        done: (rig) => rig.provisionCalls.length === 1,
+      },
+      {
+        name: "an over-budget shutdown",
+        devices: [device("l1", "leased", 0), device("a", "ready", 90 * 60_000)],
+        options: { limit: 1 },
+        done: (rig) => rig.shutdownCalls.join() === "a",
+      },
+      {
+        name: "a never-leased-idle shutdown",
+        devices: [device("l1", "leased", 0), neverLeased("n", "android")],
+        options: {},
+        done: (rig) => rig.shutdownCalls.join() === "n",
+      },
+    ];
+    for (const { name, devices, options, done } of cases) {
+      const rig = harness(devices, { ...options, refillDelayMs });
+      rig.pool.start();
+      grant(rig, "l1");
+      await rig.pool.settle();
+      expect(done(rig), name).toBe(true);
+      rig.pool.dispose();
+    }
+  });
+
+  it("nothing is held with refillDelayMs 0 and a grant, or with the default and no grant since start, and dispose cancels a pending wait timer", async () => {
+    const zero = harness([device("l1", "leased", 0), device("s1", "shutdown", 0)], {
+      targets: [iphone15],
+    });
+    zero.pool.start();
+    grant(zero, "l1");
+    await zero.pool.settle();
+    expect(zero.bootCalls, "0 and a grant").toEqual(["s1"]);
+
+    const fresh = harness([device("s1", "shutdown", 0)], { refillDelayMs, targets: [iphone15] });
+    fresh.pool.start();
+    fresh.eventBus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await fresh.pool.settle();
+    expect(fresh.bootCalls, "the default and no grant").toEqual(["s1"]);
+
+    const pending = harness([device("l1", "leased", 0), device("s1", "shutdown", 0)], {
+      refillDelayMs,
+      targets: [iphone15],
+    });
+    pending.pool.start();
+    grant(pending, "l1");
+    await pending.pool.settle();
+    pending.pool.dispose();
+    expect(pending.clock.pendingTimerCount, "no timer left after dispose").toBe(0);
   });
 
   it("a physical device's grant starts no wait", async () => {
