@@ -222,7 +222,6 @@ describe("loadConfig", () => {
       JSON.stringify({ lease: { defaultTtlMs: 60_000 } }),
     );
 
-    // The file's default is fine against the *default* cap; only the merged config is wrong.
     await expect(
       loadConfig({
         configPath,
@@ -249,7 +248,6 @@ describe("loadConfig", () => {
       });
 
       expect(warn).toHaveBeenCalledWith(`Unknown config key: "lease.${retired}"`);
-      // Not aliased onto anything: the new keys keep their own defaults.
       expect(config.lease).toEqual({
         defaultTtlMs: 15 * 60_000,
         identity: { android: "reusable", ios: "reusable" },

@@ -28,7 +28,6 @@ describe("ComponentInstaller", () => {
     await flush();
 
     expect(waiting.error()).toEqual(new ComponentInstallTimeoutError("ios", "28.0", timeoutMs));
-    // Nothing is ahead of it any more, and its install still never reaches the driver.
     harness.ios.releaseInstalls();
     await flush();
     expect(harness.ios.calls.map((call) => call.arguments[0])).not.toContain("28.0");
@@ -43,7 +42,6 @@ describe("ComponentInstaller", () => {
     harness.clock.advance(1);
     const behind = track(harness.installer.install(ios("28.0")));
     await flush();
-    // Half its budget spent waiting; then the install ahead ends and its own starts.
     harness.clock.advance(timeoutMs / 2);
     harness.ios.releaseInstalls();
     harness.ios.holdInstalls();
@@ -85,7 +83,7 @@ describe("ComponentInstaller", () => {
     ]);
   });
 
-  // Every call has the same budget, so a waiting call's deadline never falls before that of the
+  // why: Every call has the same budget, so a waiting call's deadline never falls before that of the
   // oldest call on the install running ahead of it. Firing only the waiting call's timer is what
   // shows its expiry touches nothing but its own call and its own install.
   it("leaves the install running ahead of a waiting call alone when that call times out", async () => {
@@ -164,7 +162,6 @@ describe("ComponentInstaller", () => {
     expect(notNeeded.result()).toEqual({ outcome: "not-needed" });
     expect(installs(harness.ios)).toEqual(["27.0"]);
 
-    // The not-needed call's budget runs out here; the install belongs to the other call now.
     harness.clock.advance(timeoutMs - 1);
     await flush();
     expect(needed.settled()).toBe(false);
@@ -184,7 +181,7 @@ describe("ComponentInstaller", () => {
       ) {
         this.started.push(component);
         if (this.started.length === 1) {
-          // Ignores its signal, like an installer that takes a while to die.
+          // why: Ignores its signal, like an installer that takes a while to die.
           await new Promise<void>((resolve) => {
             finishStubborn = resolve;
           });
@@ -216,7 +213,7 @@ describe("ComponentInstaller", () => {
   it("rejects only the call whose stillNeeded throws, and installs for the others joined to it", async () => {
     const harness = await createHarness();
     const failure = new Error("resolve failed");
-    // An install ahead keeps all three waiting, so each reaches the front with its check.
+    // why: An install ahead keeps all three waiting, so each reaches the front with its check.
     harness.ios.holdInstalls();
     void harness.installer.install(ios("28.0"));
     await flush();
@@ -306,7 +303,6 @@ describe("ComponentInstaller", () => {
 
       expect(installs(harness.ios)).toEqual([]);
       expect(harness.events).toEqual([]);
-      // Nothing reserved once the call is gone; a reservation already taken is given back.
       expect(harness.reservations).toEqual(
         slow === "findComponent" ? [] : [{ bytes: 0, released: true }],
       );
@@ -317,7 +313,7 @@ describe("ComponentInstaller", () => {
     let finishStubborn: (() => void) | undefined;
     class StubbornDriver extends FakeDriver {
       override async installComponent(): ReturnType<FakeDriver["installComponent"]> {
-        // Ignores its signal, like an installer that takes a while to die.
+        // why: Ignores its signal, like an installer that takes a while to die.
         await new Promise<void>((resolve) => {
           finishStubborn = resolve;
         });
@@ -340,7 +336,6 @@ describe("ComponentInstaller", () => {
   });
 
   it("fails only the call whose budget runs out while a finished install's record is written, and installs for the rest", async () => {
-    // A gate the test opens by hand, standing in for other registry writes ahead of the record.
     let openGate: (() => void) | undefined;
     const gate = new Promise<void>((resolve) => {
       openGate = resolve;

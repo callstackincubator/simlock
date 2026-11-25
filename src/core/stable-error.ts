@@ -1,5 +1,5 @@
 /**
- * Renders any thrown value as `<Error name>: <message>` -- the stable, human-readable summary
+ * why: Renders any thrown value as `<Error name>: <message>` -- the stable, human-readable summary
  * shared by every `component.install-*` / `device.purge-failed`-style diagnostic that reports
  * a caught error. Non-`Error` throws are wrapped first so every summary still has a name to
  * report. One definition shared by both driver modules and the core coordinators that need it,

@@ -42,7 +42,6 @@ async function ensure(filesystem: Filesystem, overrides: Overrides = {}): Promis
   });
 }
 
-/** The reason the root was refused, failing the test when it was accepted instead. */
 async function refusal(filesystem: Filesystem, overrides: Overrides = {}): Promise<string> {
   try {
     await ensure(filesystem, overrides);
@@ -64,7 +63,6 @@ function marker(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-/** An existing root nobody validated: created behind Simlock's back, like a user's `mkdir -p`. */
 async function seedRoot(filesystem: MemoryFilesystem, markerContents?: string): Promise<void> {
   await filesystem.mkdirp(root);
   if (markerContents !== undefined) {
@@ -88,8 +86,6 @@ describe("ensureOwnedRoot", () => {
       instanceId,
       platform: "ios",
     });
-    // The root is assembled beside itself and published with one rename, so the only
-    // thing that may be left in the parent afterwards is the root.
     await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
   });
 
@@ -116,7 +112,7 @@ describe("ensureOwnedRoot", () => {
   });
 
   it("publishes a root and its marker in the same instant", async () => {
-    // A root that becomes visible before its marker does is refused for ever after by
+    // why: A root that becomes visible before its marker does is refused for ever after by
     // every later start, and a crash between the two steps makes that permanent.
     const filesystem = new ObservingFilesystem(root, uid);
 
@@ -155,7 +151,7 @@ describe("ensureOwnedRoot", () => {
 
   it("reuses a root it already owns without rewriting its marker", async () => {
     const filesystem = createFilesystem();
-    // Bytes Simlock would never write itself: a marker in its own form could be rewritten
+    // why: Bytes Simlock would never write itself: a marker in its own form could be rewritten
     // byte for byte, since serialisation is deterministic, and this would notice nothing.
     const original = `${JSON.stringify({ platform: "ios", instanceId, owner: "simlock", schemaVersion: 1, writtenBy: "0.1.0" })}\n`;
     await seedRoot(filesystem, original);
@@ -246,7 +242,7 @@ describe("ensureOwnedRoot", () => {
   });
 
   it("refuses a root whose parent cannot be created rather than failing the daemon", async () => {
-    // A `deviceRoot` of `<home>/notes.txt/ios` is a typo, not a reason to stop every
+    // why: A `deviceRoot` of `<home>/notes.txt/ios` is a typo, not a reason to stop every
     // driver: CP2 skips one platform on an OwnedRootError and dies on anything else.
     const filesystem = createFilesystem();
     filesystem.defineFailure(parent, "ENOTDIR");
@@ -383,7 +379,7 @@ describe("ensureOwnedRoot on a real filesystem", () => {
   });
 
   it("accepts a root reached through a symlinked ancestor", async () => {
-    // The ordinary case this must not fail on: `/tmp` is itself a symlink on macOS, and
+    // why: The ordinary case this must not fail on: `/tmp` is itself a symlink on macOS, and
     // every temporary home lives under it. Only the root and its marker are checked
     // without following links -- comparing realpath against the configured path would
     // refuse a perfectly healthy machine.
@@ -414,7 +410,7 @@ describe("ensureOwnedRoot on a real filesystem", () => {
   });
 
   it("gives every daemon racing to create one root the same root and marker", async () => {
-    // Three daemons starting at once on a fresh home, against a real kernel. Creating the
+    // why: Three daemons starting at once on a fresh home, against a real kernel. Creating the
     // root in place makes two of them refuse it -- the loser sees an unmarked directory,
     // or the winner's half-written marker, and calls it somebody else's data.
     const filesystem = new NodeFilesystem();
@@ -440,7 +436,6 @@ describe("ensureOwnedRoot on a real filesystem", () => {
   });
 });
 
-/** Records what the root held the first moment it existed at all. */
 class ObservingFilesystem extends MemoryFilesystem {
   rootContentsWhenItAppeared: readonly string[] | undefined;
   readonly #root: string;
@@ -472,7 +467,6 @@ class ObservingFilesystem extends MemoryFilesystem {
   }
 }
 
-/** No room for the marker, so the create path has to unwind everything it built. */
 class FullDiskFilesystem extends MemoryFilesystem {
   constructor(owner: number) {
     super(undefined, owner);
@@ -489,7 +483,6 @@ class FullDiskFilesystem extends MemoryFilesystem {
   }
 }
 
-/** Something replaces the root in the instant between it being published and being used. */
 class SwappedRootFilesystem extends MemoryFilesystem {
   constructor(owner: number) {
     super(undefined, owner);
@@ -501,7 +494,7 @@ class SwappedRootFilesystem extends MemoryFilesystem {
   }
 }
 
-/** `mkdir` under a restrictive umask: the mode is a request the umask subtracts from. */
+/** why: `mkdir` under a restrictive umask: the mode is a request the umask subtracts from. */
 class UmaskedFilesystem extends MemoryFilesystem {
   async mkdir(path: string, options: { readonly mode?: number } = {}): Promise<void> {
     await super.mkdir(path, { mode: (options.mode ?? 0o777) & ~0o277 });
@@ -530,7 +523,7 @@ class RefusingRenameFilesystem extends MemoryFilesystem {
 }
 
 /**
- * Reports the root as absent exactly once, so the first `mkdir` loses a race it could not
+ * why: Reports the root as absent exactly once, so the first `mkdir` loses a race it could not
  * have seen coming -- the window every check-then-create has.
  */
 class RacingFilesystem extends MemoryFilesystem {

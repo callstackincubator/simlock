@@ -27,7 +27,6 @@ import {
 } from "./test-component-installer.js";
 
 describe("ComponentInstaller.remove", () => {
-  /** A harness whose iOS driver starts with nothing installed, then has `27.0` installed by Simlock. */
   async function withSimlockInstall(
     options: {
       readonly componentSizes?: Record<string, number>;
@@ -107,7 +106,6 @@ describe("ComponentInstaller.remove", () => {
   });
 
   it("refuses a component with no record with ComponentNotOwnedError and never calls removeComponent", async () => {
-    // 26.5 is on the machine, but Simlock did not install it.
     const harness = await createHarness();
 
     await expect(harness.installer.remove(removeIos("26.5"))).rejects.toBeInstanceOf(
@@ -118,7 +116,6 @@ describe("ComponentInstaller.remove", () => {
   });
 
   it("refuses a record whose version is no longer installed saying none is installed, and a record whose version was installed again saying that one is not Simlock's, in a removal and a dry run alike", async () => {
-    // 26.5 is on the machine with another receipt; 25.0 is not on the machine at all.
     const harness = await createHarness();
     for (const version of ["25.0", "26.5"]) {
       await harness.registry.recordComponent({
@@ -147,7 +144,6 @@ describe("ComponentInstaller.remove", () => {
   });
 
   it("removes a component whose receipt matches the record even when the listing names its version differently", async () => {
-    // The driver lists 26.5 with the receipt Simlock recorded under 26.5.0.
     const harness = await createHarness();
     const receipt = { preinstalled: "26.5" };
     await harness.registry.recordComponent({
@@ -177,7 +173,6 @@ describe("ComponentInstaller.remove", () => {
         state,
       };
       const harness = await withSimlockInstall();
-      // The same installer's view, with one device of that version in the registry.
       const installer = new ComponentInstaller({
         clock: harness.clock,
         decisions: new SerializedDecision(),
@@ -327,7 +322,6 @@ describe("ComponentInstaller.remove", () => {
 
   it("refuses with ComponentBusyError while an install waits on that platform, before its driver runs", async () => {
     const harness = await withSimlockInstall();
-    // At the front of the queue, still checking whether it is needed: waiting, not downloading.
     void harness.installer
       .install(ios("28.0", { stillNeeded: () => new Promise<boolean>(() => undefined) }))
       .catch(() => undefined);
@@ -348,7 +342,7 @@ describe("ComponentInstaller.remove", () => {
       drivers: (clock) => [new FakeDriver({ availableOsVersions: [], clock, platform: "ios" })],
     });
     await harness.installer.install(ios("27.0"));
-    // Something else holds the gate, so the removal's listing and first count pass before it
+    // why: Something else holds the gate, so the removal's listing and first count pass before it
     // gets its turn there.
     let releaseGate!: () => void;
     void decisions.run(
@@ -424,7 +418,6 @@ describe("ComponentInstaller.remove", () => {
     expect(() => harness.installer.claimProvision({ osVersion: "27.0", platform: "ios" })).toThrow(
       ComponentBeingRemovedError,
     );
-    // Another version is not being removed.
     expect(() =>
       harness.installer.claimProvision({ osVersion: "26.0", platform: "ios" }),
     ).not.toThrow();
@@ -450,7 +443,6 @@ describe("ComponentInstaller.remove", () => {
     expect(() =>
       harness.installer.claimProvision({ osVersion: "27.0", platform: "ios" }),
     ).not.toThrow();
-    // The turn is back: an install on the platform starts.
     await expect(harness.installer.install(ios("28.0"))).resolves.toMatchObject({
       outcome: "installed",
     });
@@ -509,7 +501,7 @@ describe("ComponentInstaller.remove", () => {
         new FakeDriver({
           availableOsVersions: [],
           clock,
-          // A delay the abort does not cut short, as a platform tool that is slow to exit.
+          // why: A delay the abort does not cut short, as a platform tool that is slow to exit.
           latencyMs: { removeComponent: 10 },
           platform: "ios",
         }),

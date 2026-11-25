@@ -29,7 +29,6 @@ describe("ComponentInstaller.inProgress", () => {
 
   it("lists an install whose driver returned and whose record is being written as downloading", async () => {
     const harness = await createHarness({
-      // A gate that never opens: the record write waits behind it.
       decisions: { run: () => new Promise(() => {}) },
     });
 
@@ -53,7 +52,6 @@ describe("ComponentInstaller.inProgress", () => {
       "27.0",
       "28.0",
     ]);
-    // Timer 1 is the budget of the call for 28.0.
     (harness.clock as ManualClock).fire(1);
     await flush();
 
@@ -70,7 +68,7 @@ describe("ComponentInstaller.inProgress", () => {
     });
     for (const driver of harness.drivers) driver.holdInstalls();
 
-    // Alternating platforms, so the oldest are not the first ones of any one queue.
+    // why: Alternating platforms, so the oldest are not the first ones of any one queue.
     for (let index = 0; index < 20; index += 1) {
       const platform = index % 2 === 0 ? "ios" : "android";
       void harness.installer.install({ component: `c${String(index)}`, platform });
@@ -84,7 +82,6 @@ describe("ComponentInstaller.inProgress", () => {
   });
 });
 
-/** A fake whose `listComponents` answers with exactly what a test lists. */
 class ListingDriver extends FakeDriver {
   constructor(
     clock: FakeClock,
@@ -189,7 +186,6 @@ describe("ComponentInstaller.list", () => {
     const deleted = await addDevice(harness.registry, "ios", "26.5");
     await harness.registry.markDeviceMissing(deleted, "test");
     await addDevice(harness.registry, "ios", "27.0");
-    // Same version string on the other platform: not a device of this component.
     await addDevice(harness.registry, "android", "26.5");
 
     const listed = await harness.installer.list();

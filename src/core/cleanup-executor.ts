@@ -4,12 +4,10 @@ import type { VirtualDevice } from "./domain.js";
 import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import type { RegistrySnapshot } from "./registry.js";
 
-/** Executes cleanup proposals after independently revalidating safety. */
 export interface CleanupActionExecutor {
   execute(proposal: Proposal): Promise<boolean>;
 }
 
-/** Registry surface required to revalidate and commit a cleanup action. */
 export interface CleanupRegistry {
   readonly snapshot: RegistrySnapshot;
 }
@@ -21,10 +19,6 @@ export interface CleanupExecutorOptions {
   readonly registry: CleanupRegistry;
 }
 
-/**
- * Performs a single device cleanup action. Proposal selection remains in the
- * reaper; this class only revalidates and executes an already proposed action.
- */
 export class CleanupExecutor implements CleanupActionExecutor {
   constructor(private readonly options: CleanupExecutorOptions) {}
 

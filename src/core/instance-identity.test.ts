@@ -57,7 +57,7 @@ describe("loadInstanceId", () => {
   });
 
   it("adopts the identity another daemon wrote first rather than overwriting it", async () => {
-    // Two daemons starting for the first time at once: the loser has to end up with the
+    // why: Two daemons starting for the first time at once: the loser has to end up with the
     // winner's id, and must not put its own on top of one the winner has already stamped
     // into its device roots.
     const filesystem = new LosingRaceFilesystem();
@@ -78,7 +78,7 @@ describe("loadInstanceId", () => {
     const filesystem = await seed(contents);
 
     await expect(load(filesystem)).rejects.toBeInstanceOf(InstanceIdentityError);
-    // The unusable file stays exactly as it was: overwriting it would strand every device
+    // why: The unusable file stays exactly as it was: overwriting it would strand every device
     // already sitting in a root marked with the id it used to hold.
     await expect(filesystem.readFile(path)).resolves.toBe(contents);
   });
@@ -102,7 +102,7 @@ describe("loadInstanceId on a real filesystem", () => {
   });
 
   it("hands every daemon racing to write the first identity the same one", async () => {
-    // Against a real kernel this time, because the exclusive create is what makes the
+    // why: Against a real kernel this time, because the exclusive create is what makes the
     // guarantee: with a check followed by a write, one daemon's id lands on top of one the
     // other has already marked its roots with, and those roots read `wrong-instance` for
     // ever afterwards.
@@ -120,7 +120,6 @@ describe("loadInstanceId on a real filesystem", () => {
     );
     const onDisk = JSON.parse(await filesystem.readFile(racedPath)) as { instanceId: string };
     expect(identities).toEqual([onDisk.instanceId, onDisk.instanceId, onDisk.instanceId]);
-    // Written once: the two that lost the race read the winner's file instead of writing.
     await expect(filesystem.readdir(home)).resolves.toEqual(["instance.json"]);
   });
 
@@ -145,7 +144,6 @@ describe("loadInstanceId on a real filesystem", () => {
   });
 });
 
-/** Stands in for another daemon whose exclusive create landed first. */
 class LosingRaceFilesystem extends MemoryFilesystem {
   async writeFileExclusive(target: string, _contents: string): Promise<void> {
     await super.writeFileAtomic(target, JSON.stringify({ instanceId: "won-the-race" }));

@@ -16,7 +16,6 @@ import { SerializedDecision } from "./serialized-decision.js";
 export const gibibyte = 1024 ** 3;
 export const timeoutMs = 60_000;
 
-/** A clock whose timers fire only when a test fires them, one at a time, by creation order. */
 export class ManualClock extends FakeClock {
   readonly #timers: { callback: () => void; cancelled: boolean }[] = [];
 
@@ -67,7 +66,6 @@ export async function createHarness(
     idGenerator: { generate: () => `id${String((nextId += 1))}` },
     state,
   });
-  // Every reservation the installer takes, and whether it gave it back.
   const guard = new DiskSpaceGuard();
   const reservations: { readonly bytes: number; released: boolean }[] = [];
   const installer = new ComponentInstaller({
@@ -111,14 +109,12 @@ export function installs(driver: FakeDriver): readonly unknown[] {
     .map((call) => call.arguments[0]);
 }
 
-/** Lets every settled promise and queued continuation run. */
 export async function flush(): Promise<void> {
   for (let count = 0; count < 100; count += 1) {
     await Promise.resolve();
   }
 }
 
-/** A promise's outcome without awaiting it, so a test can look while it is still open. */
 export function track<T>(promise: Promise<T>): {
   readonly settled: () => boolean;
   readonly result: () => T | undefined;

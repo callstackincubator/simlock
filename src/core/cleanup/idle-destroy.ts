@@ -3,7 +3,7 @@ import type { CleanupRule, Proposal, RegistryView } from "./types.js";
 const GIBIBYTE = 1024 ** 3;
 
 /**
- * Under disk pressure, waiting out the full T2 window before reclaiming disk
+ * why: Under disk pressure, waiting out the full T2 window before reclaiming disk
  * defeats the point, so this rule shortens its own threshold to T1 (the
  * shutdown threshold) instead. There is no separate pressure rule: the view
  * already carries diskFreeBytes, so this stays a pure function of it — no
@@ -17,7 +17,7 @@ export const idleDestroyRule: CleanupRule = {
       : view.config.idle.deleteAfterMs;
 
     return view.devices.flatMap((device) => {
-      // A device that never served a lease has no end of one: it is timed from when it was shut
+      // why: A device that never served a lease has no end of one: it is timed from when it was shut
       // down, so one the pool created and later shut down is deleted too. A record shut down
       // before `shutdownAt` existed has neither, and is left alone.
       const idleSince = device.lastLeaseEndedAt ?? device.shutdownAt;

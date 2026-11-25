@@ -37,9 +37,6 @@ export interface CleanupRunOptions {
   readonly rule?: string;
 }
 
-/**
- * Reconciles pure cleanup proposals against current registry safety invariants.
- */
 export class CleanupReaper {
   readonly #automaticRules: readonly CleanupRule[];
   readonly #unsubscribe: readonly (() => void)[];
@@ -49,8 +46,6 @@ export class CleanupReaper {
   readonly #requestRuns = new Set<Promise<readonly Proposal[]>>();
   #tickTimer: TimerHandle | undefined;
   #disposed = false;
-  // Tracks the previous tick's pressure state so disk.pressure-detected fires
-  // only on the crossing edge, not once per tick while pressure persists.
   #underPressure = false;
   readonly #logger: Logger;
   readonly #loggedRuns = new WeakSet<Promise<readonly Proposal[]>>();
@@ -61,14 +56,11 @@ export class CleanupReaper {
     this.#unsubscribe = [
       options.eventBus.subscribe("lease.released", () => this.#trigger()),
       options.eventBus.subscribe("daemon.started", () => this.#trigger()),
-      // An external emitter may exist later; the reaper reacts to the event
-      // but idle-destroy itself stays pure over diskFreeBytes (see idle-destroy.ts).
       options.eventBus.subscribe("disk.pressure-detected", () => this.#trigger()),
     ];
     this.#armTick();
   }
 
-  /** Rules currently registered, for `simlock list --rules` and `--rule` selection. */
   get rules(): readonly CleanupRule[] {
     return this.#automaticRules;
   }
@@ -107,7 +99,7 @@ export class CleanupReaper {
   }
 
   async #runOnce({ dryRun = false, rule }: CleanupRunOptions = {}): Promise<readonly Proposal[]> {
-    // A dry run is a preview and must stay free of side effects: emitting the
+    // why: A dry run is a preview and must stay free of side effects: emitting the
     // pressure fact from one would wake this reaper through its own subscription
     // and turn `cleanup --dry-run` into a real cleanup.
     const view = await this.#view({ observePressure: !dryRun });
@@ -144,7 +136,7 @@ export class CleanupReaper {
   }
 
   /**
-   * A run nobody awaits: its failure has no caller to reach, so it is logged here. Triggers that
+   * why: A run nobody awaits: its failure has no caller to reach, so it is logged here. Triggers that
    * arrive while a run is in flight share its promise, so a run is logged once, not once per
    * trigger that joined it.
    */
@@ -227,7 +219,7 @@ export class CleanupReaper {
   }
 
   /**
-   * disk.pressure-detected is a post-commit observer fact, not the trigger for
+   * why: disk.pressure-detected is a post-commit observer fact, not the trigger for
    * idle-destroy's own behavior (that rule reads diskFreeBytes off the view
    * directly). Edge-triggered so a sustained under-threshold condition emits
    * once, not once per tick.

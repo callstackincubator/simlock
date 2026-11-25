@@ -40,7 +40,6 @@ export class DeviceOperationClaims {
     return claim;
   }
 
-  /** What holds `deviceId` and for whom; `undefined` when nothing does. */
   claim(deviceId: string): { readonly kind: DeviceOperation; readonly owner?: string } | undefined {
     const held = this.#claims.get(deviceId);
     if (held === undefined) return undefined;

@@ -3,19 +3,16 @@ import { isSettled, type LeaseRequestFailure, type LeaseRequestRecord } from "./
 import type { DeviceRequest } from "./driver.js";
 import { presentFields } from "./present-fields.js";
 
-/** `lease.requestRetentionMs` and `lease.maxRequestRecords`, as a store applies them. */
 export interface LeaseRequestLimits {
   readonly retentionMs: number;
   readonly maxRecords: number;
 }
 
-/** The one place a lease request's id is minted. */
 export function newLeaseRequestId(idGenerator: IdGenerator): string {
   return `req_${idGenerator.generate()}`;
 }
 
 export interface NewLeaseRequest {
-  /** The id the record is stored under, when the caller minted it before admission checks. */
   readonly id?: string | undefined;
   readonly requesterId: string;
   readonly ownerId: string;
@@ -39,17 +36,14 @@ export type LeaseRequestOutcome<Grant> =
  * cap, and settlement through the functions below, so the two cannot disagree about them.
  */
 export interface LeaseRequestStore<Grant> {
-  /** Every record still inside its retention window, oldest first. */
   leaseRequests(): readonly LeaseRequestRecord<Grant>[];
   createLeaseRequest(input: NewLeaseRequest): Promise<LeaseRequestRecord<Grant>>;
-  /** Writes a result onto an open record. A record that is already settled, or gone, is left alone. */
   settleLeaseRequest(
     id: string,
     outcome: LeaseRequestOutcome<Grant>,
   ): Promise<LeaseRequestRecord<Grant> | undefined>;
 }
 
-/** An open record is always retained; a settled one only until `retentionMs` after it settled. */
 export function retainedLeaseRequests<Grant>(
   records: readonly LeaseRequestRecord<Grant>[],
   now: number,
@@ -61,7 +55,7 @@ export function retainedLeaseRequests<Grant>(
 }
 
 /**
- * Appends `record` after pruning expired records and, while the list is at the cap, evicting the
+ * why: Appends `record` after pruning expired records and, while the list is at the cap, evicting the
  * oldest settled one. An open record is never evicted: when every record is open the new one is
  * still admitted, because refusing it would turn the cap into an outage rather than a bound.
  */

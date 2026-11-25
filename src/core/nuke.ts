@@ -13,7 +13,6 @@ export interface NukeRunOptions {
   readonly platform?: Platform;
 }
 
-/** Thin operator command facade over the dedicated nuke capability. */
 export class Nuke {
   constructor(private readonly options: NukeOptions) {}
 
