@@ -22,6 +22,9 @@ None: report `Issues: none` and stop.
 
 ## 2. One draft task per class
 
+Take the classes in the order the script printed them, most PRs first, and
+stop after three tasks: the rest wait for next week's run.
+
 For each class:
 
 1. Skip it when an open issue's title already names it:
@@ -32,9 +35,17 @@ For each class:
 3. Decide what would have caught it before review:
    - **a check**: a lint rule, a comment-lint case, a `stale-refs.sh`
      pattern or a new script, when the pre-fix code shows the defect
-     without judgement. Name where it goes.
-   - **a rule line**: one sentence for the review brief or rule file
-     whose check missed it, when only judgement can see it.
+     without judgement. Name where it goes. A check that sees only some of
+     the findings is still a check: name the shape it sees.
+   - **a rule line**, only for a class that names no rule: one sentence
+     for the review brief or rule file whose check missed it, when only
+     judgement can see it.
+
+   A class that names a rule (`testing 3`, `documentation 7`) already has
+   its sentence, and agents break it all the same: it gets a check or
+   nothing. No pre-fix example shows a shape a check could see: open no
+   task and list the class under `Judgement`.
+
 4. Open the task:
 
    ```bash
@@ -44,8 +55,10 @@ For each class:
 
    The body: the class and the PRs; for each finding its `path:line` and
    its pre-fix and fixed commits; the proposed check or rule line; and,
-   for a check, one Done when line: it flags every pre-fix example above
-   and passes every fixed one. End with `*Written by an agent.*`.
+   for a check, two Done when lines: it flags every pre-fix example above
+   it can see and passes every fixed one; the rule it enforces names the
+   check, and the brief and checklist lines that only restated what it now
+   catches are deleted. End with `*Written by an agent.*`.
 
 ## Report
 
@@ -53,4 +66,6 @@ For each class:
 Routine: recurring-findings  Window: <from> to <to>  Classes: <n>
 Issues: #a, #b | none
 Skipped: <class> — <open issue> | none
+Judgement: <class> (<n> PRs), ... | none
+Left for next week: <class>, ... | none
 ```
