@@ -49,7 +49,9 @@ section order, that a `path:line` exists, or Depends on against Used by.
   cannot do what the row says is a finding. So is a cited line that does
   not show what the row claims, and a seam that cannot see its Behaviours
   row (a fake that lacks what the row needs, a result checked on an
-  internal callback).
+  internal callback). A bound a row takes from a measurement is a finding
+  when the runs it names did not go through the path the row describes,
+  were fewer than three a side, or leave the bound inside a side's range.
 - **handoffs.** For every row one task provides and another uses: can each
   side be built from the row alone, without reading the other's code? Do
   two rows, a row and an ADR, or a row and an Example say one thing two

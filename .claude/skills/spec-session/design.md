@@ -23,6 +23,14 @@ body exists until this stage is done.
    function that must change, each thing it needs from another task. What
    it needs is a row; add the ones the walk finds. A point you cannot
    settle goes under Open questions, never into a row as a guess.
+5. A row or Completion condition that sets a bound from a measurement (a
+   time, a CPU or memory figure, a ratio between two of them) names the
+   comment or ADR section that holds the runs. They ran the path the row
+   describes, through the product's own command, at least three times a side
+   with the sides taken in turn, and the bound lies outside both sides'
+   ranges. Numbers from a spike, a prototype or steps run by hand set no
+   bound: the row then states the direction only ("less CPU than a quick
+   copy"), and the test that proves it records the figures.
 
 Then, on the draft file:
 
