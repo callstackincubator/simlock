@@ -231,6 +231,14 @@ describe("simlock tunnel that runs", () => {
         lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
         url: `ws://${host}:7300/v1/leases/L1/tunnel`,
       })),
+      ...[
+        ["--url", "http://100.75.181.35:7300", "--allow-insecure-http"],
+        ["--allow-insecure-http", "--url", "http://100.75.181.35:7300"],
+      ].map((flags) => ({
+        argv: [...flags, "reverse", "5173", "--lease", "L1"],
+        lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
+        url: "ws://100.75.181.35:7300/v1/leases/L1/tunnel",
+      })),
       {
         argv: ["reverse", "5173"],
         lines: ["reverse device:5173 -> localhost:5173 (lease only)"],
