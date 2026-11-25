@@ -1,6 +1,6 @@
 # 0091. An operator names a worker's tags, and a lease may require them
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-25
 - **Feature:** #1832 (request #1541). The key's bounds, the messages and
   the stored column are in the feature's design tables.
