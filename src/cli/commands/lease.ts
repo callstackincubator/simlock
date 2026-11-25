@@ -16,7 +16,7 @@ import {
 } from "../../contract/index.js";
 import type { LeaseGrant, SimlockAdminClient } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
-import { connectDaemonClient } from "../connect.js";
+import { checkedFarmOrigin, connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
 import { checkedRunId } from "./run-id.js";
@@ -149,10 +149,7 @@ async function runLease(
   const farmOrigin =
     environment.remote === undefined
       ? undefined
-      : (await import("../../simlock-client/farm-url.js")).checkedFarmUrl(
-          environment.remote.url,
-          "--url",
-        );
+      : (await checkedFarmOrigin(environment.remote.url, environment.remote)).url;
   let leaseLost = false;
   let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
