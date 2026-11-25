@@ -231,9 +231,8 @@ describe("WaitQueue", () => {
   // or simply left that still-live timer alone. Both mechanisms hit the same fixed `deadlineAt`.
   // The `setTimer` spy below is what tells them apart: it asserts directly on the *mechanism* --
   // exactly one timer is ever armed across the whole `queued -> processing -> queued` cycle, not
-  // two -- which is what `#armTimeout`'s own doc comment now documents as the only thing that
-  // can happen (its `waiter.timer !== undefined` guard makes a genuine recompute-and-re-arm
-  // unreachable through this class's public API). The externally observed timing this test also
+  // two -- which is what `#armTimeout` does under `FakeClock` (its `waiter.timer !== undefined`
+  // guard makes a recompute-and-re-arm unreachable there). The externally observed timing this test also
   // pins is real and worth keeping; it just is not, on its own, evidence of which mechanism
   // produced it.
   it("leaves a still-live timer alone across a queued -> processing -> queued cycle, rather than cancelling and re-arming it, so the total wait never exceeds the original timeoutMs (H5, round 3 review)", async () => {
