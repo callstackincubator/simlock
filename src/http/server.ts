@@ -8,7 +8,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 
-import type { Logger } from "../ports/index.js";
+import type { Clock, Logger, TimerHandle } from "../ports/index.js";
 
 /**
  * Where `pnpm build` writes the console (ADR 0011 §2): `dist/ui`, beside this module's own
@@ -38,8 +38,8 @@ export interface HttpGatewayOptions {
   readonly logger: Logger;
   /** The built console's directory. Defaults to `dist/ui` beside this module; tests pass their own. */
   readonly consoleRoot?: string;
-  /** why: tests pass a short linger so they need not wait the real one (`UNREAD_BODY_LINGER_MS`). */
-  readonly unreadBodyLingerMs?: number;
+  /** why: the linger after an answer sent before its request body ended runs on it, so a test drives it with a fake clock. */
+  readonly clock: Clock;
   /**
    * why: Called once, with the Node HTTP server, as soon as it exists (before it is listening).
    * ADR 0005 §4 puts the worker uplink on this same listener -- upgraded on `/v1/uplink` -- so
@@ -157,7 +157,7 @@ export class HttpGateway {
   readonly #sockets = new Set<Socket>();
   readonly #onServerCreated: ((server: Server) => void) | undefined;
   readonly #consoleRoot: string;
-  readonly #unreadBodyLingerMs: number;
+  readonly #clock: Clock;
   #server: Server | undefined;
 
   constructor(app: FetchApp, options: HttpGatewayOptions) {
@@ -167,7 +167,7 @@ export class HttpGateway {
     this.#logger = options.logger;
     this.#onServerCreated = options.onServerCreated;
     this.#consoleRoot = options.consoleRoot ?? BUILT_CONSOLE_ROOT;
-    this.#unreadBodyLingerMs = options.unreadBodyLingerMs ?? UNREAD_BODY_LINGER_MS;
+    this.#clock = options.clock;
   }
 
   /** Resolves once listening, with the actual bound port (matches the configured one in v1, since port 0 is never used here). */
@@ -204,7 +204,7 @@ export class HttpGateway {
       server.requestTimeout = 0;
       server.on("request", (request: IncomingMessage, response: ServerResponse) => {
         response.once("close", () => {
-          if (!request.complete) cutUnreadBody(request, this.#unreadBodyLingerMs);
+          if (!request.complete) cutUnreadBody(request, this.#clock);
         });
       });
       this.#server = server;
@@ -238,18 +238,17 @@ export class HttpGateway {
 const UNREAD_BODY_LINGER_MS = 2_000;
 
 // why: the linger lets the client read the answer before the socket is cut; a socket whose body ended in it stays open for keep-alive. Every listener added here goes when the body ends, the timer fires or the socket closes, so a keep-alive socket does not collect them.
-function cutUnreadBody(request: IncomingMessage, lingerMs: number): void {
+function cutUnreadBody(request: IncomingMessage, clock: Clock): void {
   const socket = request.socket;
   const settle = () => {
-    clearTimeout(timer);
+    clock.cancel(timer);
     socket.off("close", settle);
     request.off("end", settle);
   };
-  const timer = setTimeout(() => {
+  const timer: TimerHandle = clock.setTimer(UNREAD_BODY_LINGER_MS, () => {
     settle();
     if (!request.complete) socket.destroy();
-  }, lingerMs);
-  timer.unref();
+  });
   socket.once("close", settle);
   request.once("end", settle);
 }

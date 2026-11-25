@@ -684,6 +684,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       auth,
     });
     const gateway = new HttpGateway(app, {
+      clock,
       host: config.http.host,
       logger: httpLogger,
       // why: ADR 0005 §4: the uplink upgrades on this same listener, so the fleet has one inbound

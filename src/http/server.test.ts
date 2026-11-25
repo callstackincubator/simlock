@@ -202,33 +202,33 @@ describe("withConsole", () => {
   });
 });
 
-// why: the linger only has to outlast a local client's read of the answer; a short one keeps these tests fast.
-const SHORT_LINGER_MS = 50;
+// why: longer than any linger, so advancing the clock by it fires every timer an answer armed.
+const PAST_THE_LINGER_MS = 60_000;
 
 describe("HttpGateway", () => {
   async function started(
     root: string,
     onServerCreated?: (server: Server) => void,
     fetch: (request: Request) => Response | Promise<Response> = () => new Response("api"),
-    unreadBodyLingerMs?: number,
   ) {
+    const clock = new FakeClock(0);
     const logSink = new MemoryLogSink();
     const logger = new JsonLinesLogger({ clock: new FakeClock(0), sink: logSink });
     const gateway = new HttpGateway(
       { fetch },
       {
+        clock,
         consoleRoot: root,
         host: "127.0.0.1",
         logger,
         port: 0,
         ...(onServerCreated === undefined ? {} : { onServerCreated }),
-        ...(unreadBodyLingerMs === undefined ? {} : { unreadBodyLingerMs }),
       },
     );
     const { port } = await gateway.start();
     const warnings = () =>
       logSink.records.filter((record) => record.level === "warn").map((r) => r.message);
-    return { gateway, port, warnings };
+    return { clock, gateway, port, warnings };
   }
 
   it("serves the console page at / on its listener, with no warning when it is built", async () => {
@@ -263,11 +263,10 @@ describe("HttpGateway", () => {
       await request.body?.getReader().read();
       return new Response("refused", { status: 503 });
     };
-    const { gateway, port } = await started(
+    const { clock, gateway, port } = await started(
       await emptyRoot(),
       undefined,
       refuseAfterFirstChunk,
-      SHORT_LINGER_MS,
     );
     // why: on the macOS gateway in issue 1810 the adapter's `destroySoon()` sent the FIN and the close never followed; this holds the socket in that state.
     const halfCloseOnly = vi.spyOn(Socket.prototype, "destroySoon").mockImplementation(function (
@@ -285,7 +284,9 @@ describe("HttpGateway", () => {
       client.write(
         "PUT /v1/upload HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 1099511627776\r\n\r\n",
       );
+      await vi.waitFor(() => expect(clock.pendingTimerCount).toBe(1));
 
+      clock.advance(PAST_THE_LINGER_MS);
       const wasCut = await cut;
 
       expect(received).toMatch(/^HTTP\/1\.1 503 Service Unavailable\r\n[\s\S]*\r\nrefused/);
@@ -299,12 +300,7 @@ describe("HttpGateway", () => {
   });
 
   it("a request whose whole body arrived keeps its connection open for the next request, though the app never read the body", async () => {
-    const { gateway, port } = await started(
-      await emptyRoot(),
-      undefined,
-      undefined,
-      SHORT_LINGER_MS,
-    );
+    const { clock, gateway, port } = await started(await emptyRoot());
     const client = connect({ host: "127.0.0.1", port });
     try {
       let received = "";
@@ -312,8 +308,7 @@ describe("HttpGateway", () => {
       const put = "PUT /v1/upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 4\r\n\r\nbody";
       client.write(put);
       await vi.waitFor(() => expect(received).toMatch(/\r\napi\r\n0\r\n\r\n$/));
-      // why: past the linger, so a timer armed for this request has fired by the next one.
-      await new Promise((resolve) => setTimeout(resolve, SHORT_LINGER_MS * 4));
+      clock.advance(PAST_THE_LINGER_MS);
 
       client.write("GET /v1/healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
 
@@ -327,11 +322,8 @@ describe("HttpGateway", () => {
 
   it("a keep-alive connection that carries many answers sent before their bodies were read does not collect listeners", async () => {
     let serverSocket: Socket | undefined;
-    const { gateway, port } = await started(
-      await emptyRoot(),
-      (server) => server.on("connection", (socket: Socket) => (serverSocket = socket)),
-      undefined,
-      SHORT_LINGER_MS,
+    const { clock, gateway, port } = await started(await emptyRoot(), (server) =>
+      server.on("connection", (socket: Socket) => (serverSocket = socket)),
     );
     const client = connect({ host: "127.0.0.1", port });
     let received = "";
@@ -341,14 +333,14 @@ describe("HttpGateway", () => {
     try {
       client.write(post);
       await vi.waitFor(() => expect(answers()).toBe(1));
-      await new Promise((resolve) => setTimeout(resolve, SHORT_LINGER_MS * 4));
+      clock.advance(PAST_THE_LINGER_MS);
       const before = serverSocket?.listenerCount("close");
 
       for (let sent = 2; sent <= 16; sent += 1) {
         client.write(post);
         await vi.waitFor(() => expect(answers()).toBe(sent));
+        clock.advance(PAST_THE_LINGER_MS);
       }
-      await new Promise((resolve) => setTimeout(resolve, SHORT_LINGER_MS * 4));
 
       expect(serverSocket?.listenerCount("close")).toBe(before);
       expect(client.destroyed).toBe(false);
