@@ -56,6 +56,7 @@ Leases one simulator, emulator or enrolled phone for this session, and waits for
 | `osVersion` | string | An exact version (`18.4`) or a range: `>=`, `>`, `<=` or `<` and a version, joined by single spaces (`>=18 <26`), or a hyphen range (`18 - 26`). A range never downloads. |
 | `mode` | `slim` or `full` | iOS device mode. Default: the worker's. |
 | `except` | list of 1 to 16 category names | iOS slim only: keep these slim categories running, such as `["store"]`. |
+| `requires` | list of up to 8 capability names | Lease only from a worker that has every name, such as `["bank-network"]`: a module it runs or a tag an operator gave it. Default: any worker. |
 | `imageTag` | string | Android system image type, such as `google_apis_playstore`. Uses only an installed image. |
 | `baseline` | string | A saved baseline's name: you get a new copy of it. Must match any `model`, `osVersion`, `mode` or `imageTag` you pass. Not with `class`. |
 | `physical` | boolean | Lease an enrolled phone or tablet. |
