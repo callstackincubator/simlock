@@ -132,6 +132,7 @@ describe("loadConfig with worker tags", () => {
     ["an uppercase name", ["Bank"], badName],
     ["a name that starts with a digit", ["1st-floor"], badName],
     ["a name of 33 characters", ["a".repeat(33)], badName],
+    ["a name that is not a string", [null], badName],
     [
       "nine names",
       Array.from({ length: 9 }, (_, index) => `tag-${String.fromCharCode(97 + index)}`),

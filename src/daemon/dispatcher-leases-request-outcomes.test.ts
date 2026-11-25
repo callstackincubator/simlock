@@ -172,6 +172,14 @@ describe("Dispatcher: lease.request requires", () => {
       session(),
     );
     expect(afterUnavailable.lease.id).toBe(first.lease.id);
+    // why: the key is the requester's own, so another requester sending it is no replay and is checked.
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { ...ask, requesterId: "c", requires: names },
+        session(),
+      ),
+    ).rejects.toMatchObject({ code: "CAPABILITY_MISSING" });
     for (const requires of [[...names, "vpn-eu"], names.slice(0, 1), undefined]) {
       const conflict = await dispatcher
         .dispatch(

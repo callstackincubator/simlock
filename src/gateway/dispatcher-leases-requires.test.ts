@@ -35,6 +35,11 @@ describe("GatewayDispatcher: lease.request requires a worker's tag", () => {
   it("places a request that requires a tag only on the worker that lists it, waits for it when busy, and refuses with CAPABILITY_MISSING when no worker lists it", async () => {
     const { dispatcher, tagged, untagged, workers } = fleet();
     for (const index of [1, 2, 3]) tagged.requestLeaseQueue.push(grantFor(`lse_${String(index)}`));
+    // why: a wrong placement on the untagged worker is granted and fails the assertions below, instead of hanging until the test times out.
+    for (const index of [1, 2, 3, 4]) {
+      untagged.requestLeaseQueue.push(grantFor(`lse_u${String(index)}`));
+    }
+    tagged.requestLeaseQueue.push(grantFor("lse_4"));
 
     for (const index of [1, 2, 3]) {
       const granted = await dispatcher.dispatch(
