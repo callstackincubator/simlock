@@ -76,18 +76,12 @@ export function withBaseline(worker: WorkerView, request: RoutableRequest): Rout
   };
 }
 
-/** The first model of the entry that could serve the request: a pairing in the OS constraint. */
 function servingModel(catalog: PlatformEntry, request: RoutableRequest): string | undefined {
   return candidates(catalog, request).find((model) =>
     pairedRuntimesOf(catalog, model, request).some((runtime) => osFits(runtime, request)),
   );
 }
 
-/**
- * What a ready device must satisfy, on this worker, to serve the request (ADR 0015 §6, §8): the
- * core's `fits` over a requirement built from the worker's own catalog. `undefined` when the
- * worker cannot serve the request. The mode is not part of it; `warm-hit` keeps that rule.
- */
 export function deviceFit(
   worker: WorkerView,
   request: RoutableRequest,
@@ -160,10 +154,6 @@ function osRequirement(
   return { kind: "installed", versions: newest === undefined ? [] : [newest] };
 }
 
-/**
- * The models that could serve the request, before pairing: the one an exact request names, or
- * every model of the requested class, in catalog order.
- */
 function candidates(catalog: PlatformEntry, request: RoutableRequest): readonly string[] {
   if (request.model !== undefined) {
     const model = findCatalogModel(catalog, request.model);
@@ -173,12 +163,11 @@ function candidates(catalog: PlatformEntry, request: RoutableRequest): readonly 
   return catalog.models.filter((model) => modelClass(catalog, model) === wanted);
 }
 
-/** The class a request without a model means: the one it names, `phone` for neither. */
 export function wantedClass(request: RoutableRequest): DeviceClass {
   return requestedClass({ class: request.class });
 }
 
-/** The OS constraint a request names, or `undefined` for none. A string the grammar refuses can
+/** why: The OS constraint a request names, or `undefined` for none. A string the grammar refuses can
  * never reach here through the contract; it is read as exact, which no runtime matches. */
 function osConstraintOf(request: RoutableRequest): OsConstraint | undefined {
   if (request.osVersion === undefined) return undefined;
@@ -191,10 +180,6 @@ function osFits(runtime: string, request: RoutableRequest): boolean {
   return constraint === undefined || satisfies(runtime, constraint);
 }
 
-/**
- * The runtimes the model pairs with. A request naming an image tag counts only the runtimes for
- * which the catalog's `images` lists an image of that tag.
- */
 function pairedRuntimesOf(
   catalog: PlatformEntry,
   model: string,
@@ -227,16 +212,10 @@ export function physicalMatch(
   });
 }
 
-/** Whether the worker's catalog has an entry for the request's platform. */
 export function hasPlatform(worker: WorkerView, request: RoutableRequest): boolean {
   return catalogOf(worker, request) !== undefined;
 }
 
-/**
- * Whether the worker lists the requested model, by name or alias in any letter case, or, for a
- * class request, any model of the class, whatever runtimes it pairs with. The table of ADR 0009
- * §4 tells a missing model from a missing runtime with it.
- */
 export function listsModel(worker: WorkerView, request: RoutableRequest): boolean {
   const narrowed = withBaseline(worker, request);
   const catalog = catalogOf(worker, narrowed);

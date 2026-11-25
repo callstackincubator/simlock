@@ -35,7 +35,6 @@ describe("takes-requests in the registered policy", () => {
     ["whose capacity has not been read", { capacity: undefined }],
     ["whose catalog has not been read since it connected", { catalogReadAt: undefined }],
   ])("passes over a worker that is %s for one that takes requests", (_label, overrides) => {
-    // wrk_a sorts first and holds a warm device, so only takes-requests can pass it over.
     const { capacity, ...rest } = {
       ...view("wrk_a", { devices: [deviceFixture("dev_1", "ready")] }),
       ...overrides,

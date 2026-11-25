@@ -9,18 +9,14 @@ export const RETENTION_MS = 24 * 60 * 60_000;
  * care about the max-TTL warning never sees one. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
-/** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
+/** why: Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
  * prefix is that principal plus a trailing `:`. */
 export const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
 
 export function registry(
   options: {
     readonly drainStore?: MemoryDrainStore;
-    /** Omit to get the default fixture prefix; pass `null` explicitly (H3) to build a registry
-     * with no `gatewayRequesterPrefix` at all, the way `dispatcher.test.ts`'s harness does. */
     readonly gatewayRequesterPrefix?: string | null;
-    /** ADR 0005 §15's own cap. Defaults to `core/config.ts`'s own default so a test that never
-     * reports a worker `lease.maxTtlMs` cannot accidentally trip the new warning. */
     readonly leaseMaxTtlMs?: number;
     readonly logger?: Logger;
   } = {},

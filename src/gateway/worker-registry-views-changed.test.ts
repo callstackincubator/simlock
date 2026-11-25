@@ -11,8 +11,6 @@ describe("WorkerRegistry", () => {
     expect(workers.views().map((view) => view.id)).toEqual(["wrk_a", "wrk_b", "wrk_c"]);
   });
 
-  // `./fleet-ports.ts`'s `FleetViews#onViewsChanged` -- #118's seam. This registry has no
-  // listeners of its own; these tests are the notifier's whole contract.
   describe("onViewsChanged", () => {
     it("fires once per committed change, after the view is committed", () => {
       const { workers } = registry();
@@ -32,11 +30,8 @@ describe("WorkerRegistry", () => {
         fired += 1;
       });
 
-      // Draining an already-undrained-to-false worker: `setDrained` no-ops.
       await workers.setDrained("wrk_1", false);
-      // A refresh for a worker with no view: dropped.
       workers.refresh("wrk_missing", { queueDepth: 1 });
-      // Disconnecting an already-disconnected view: no-op.
       workers.disconnected("wrk_1");
       workers.disconnected("wrk_1");
 
@@ -69,9 +64,7 @@ describe("WorkerRegistry", () => {
 
       expect(() => workers.connected("wrk_1", undefined, undefined)).not.toThrow();
 
-      // The mutation itself committed...
       expect(workers.view("wrk_1")?.connection).toBe("connected");
-      // ...and the listener registered after the throwing one still ran.
       expect(afterFired).toBe(1);
     });
 
