@@ -81,7 +81,9 @@ describe("MCP lease_simulator: the slim hint", () => {
     for (const row of rows) {
       const client = new FakeSimlockClient();
       client.requestLeaseImpl = () => Promise.resolve(row.grant);
+      let catalogAsked = false;
       client.getCatalogImpl = () => {
+        catalogAsked = true;
         if ("read" in row && row.read === "reject") {
           return Promise.reject(new SimlockError("INTERNAL", "domain", "catalog failed", {}));
         }
@@ -97,9 +99,15 @@ describe("MCP lease_simulator: the slim hint", () => {
             return result;
           },
         );
+        // why: the hint waits at most 2 s of fake time from its catalog read, so the waits advance
+        // the clock by no more than that once the read began.
+        let advanced = 0;
         await vi.waitFor(
           () => {
-            (clock as FakeClock).advance(500);
+            if (catalogAsked && advanced < 2_000) {
+              (clock as FakeClock).advance(500);
+              advanced += 500;
+            }
             expect(done, `${row.name}: the call has not answered`).toBe(true);
           },
           { timeout: 10_000 },

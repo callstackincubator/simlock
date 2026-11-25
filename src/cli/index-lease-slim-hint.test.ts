@@ -1,6 +1,7 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { FakeClock } from "../ports/index.js";
-import { runCli } from "./index.js";
+import { runCli, type CliEnvironment } from "./index.js";
 import { fakeClient, outputCapture, settle } from "./test-index.js";
 import { SimlockError } from "../contract/index.js";
 
@@ -192,8 +193,18 @@ describe("simlock lease: the slim hint line", () => {
       catalogReads: 1,
       stdout: "export SIMLOCK_DEVICE='dev_1'\n",
     },
+    {
+      name: "held lease (no --detach): the line is printed while the command holds the lease",
+      catalog: iosCatalog(CATEGORIES),
+      grant,
+      flags: [],
+      held: true,
+      lines: [hintFor(CATEGORIES)],
+      catalogReads: 1,
+    },
   ] as {
     name: string;
+    held?: boolean;
     catalog: ReturnType<typeof iosCatalog>;
     read?: "reject" | "hang";
     grant: unknown;
@@ -207,7 +218,9 @@ describe("simlock lease: the slim hint line", () => {
     for (const row of rows) {
       const output = outputCapture();
       let catalogReads = 0;
+      const signals = new EventEmitter();
       const environment = output.environmentWith({
+        signals: signals as unknown as CliEnvironment["signals"],
         connectAdmin: async () =>
           fakeClient({
             getCatalog: () => {
@@ -223,7 +236,7 @@ describe("simlock lease: the slim hint line", () => {
       });
       let settled = false;
       const run = runCli(
-        ["lease", "--platform", "ios", "--detach", ...row.flags],
+        ["lease", "--platform", "ios", ...(row.held === true ? [] : ["--detach"]), ...row.flags],
         environment,
       ).then((code) => {
         settled = true;
@@ -233,13 +246,26 @@ describe("simlock lease: the slim hint line", () => {
         await settle();
         expect(output.stdout, `${row.name}: the grant waits for the catalog`).not.toBe("");
       }
+      // why: the hint waits at most 2 s of fake time, so the waits advance the clock by no more.
+      let advanced = 0;
       await vi.waitFor(
         () => {
-          (environment.clock as FakeClock).advance(500);
-          expect(settled, `${row.name}: the command has not ended`).toBe(true);
+          if (advanced < 2_000) {
+            (environment.clock as FakeClock).advance(500);
+            advanced += 500;
+          }
+          if (row.held === true) {
+            expect(output.stderr, `${row.name}: the hint is out`).toContain("slim:");
+          } else {
+            expect(settled, `${row.name}: the command has not ended`).toBe(true);
+          }
         },
         { timeout: 10_000 },
       );
+      if (row.held === true) {
+        expect(settled, `${row.name}: the command still holds the lease`).toBe(false);
+        signals.emit("SIGINT");
+      }
       const exitCode = await run;
       expect(exitCode, row.name).toBe(0);
       expect(hintLines(output.stderr), row.name).toEqual(row.lines);
