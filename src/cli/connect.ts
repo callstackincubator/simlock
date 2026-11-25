@@ -37,21 +37,35 @@ function writeAgentFallbackNotice(environment: CliEnvironment, source: Credentia
   environment.stderr.write(`${JSON.stringify({ notice })}\n`);
 }
 
-// why: remote mode needs a valid URL and a token before anything connects, for a command that connects (`connectFarm`), for `simlock mcp`, which connects only on a tool call, and for the HTTP commands (`simlock files`), so all refuse the same input with the same words.
-export async function checkedFarm(farm: RemoteFarm): Promise<{ url: string; token: string }> {
-  const { checkedFarmUrl, FarmUrlError, farmTokenFits } =
-    await import("../simlock-client/farm-url.js");
-  let url: string;
+// why: the one CLI check of a farm URL with the caller's opt-in, shared by every command that names a farm, so each refuses the same input with the same words and none checks it a second time without the opt-in.
+export async function checkedFarmOrigin(
+  text: string,
+  opt: Pick<RemoteFarm, "allowInsecureHttpFlag" | "allowInsecureHttpVariable">,
+): Promise<{ url: string; allowInsecureHttp: boolean }> {
+  const { checkedFarmUrl, FarmUrlError } = await import("../simlock-client/farm-url.js");
+  const allowInsecureHttp = opt.allowInsecureHttpFlag || opt.allowInsecureHttpVariable === "1";
   try {
-    url = checkedFarmUrl(farm.url, "--url");
+    const url = checkedFarmUrl(text, "--url", {
+      allowed: allowInsecureHttp,
+      hint: "pass --allow-insecure-http or set SIMLOCK_ALLOW_INSECURE_HTTP=1",
+    });
+    return { allowInsecureHttp, url };
   } catch (error: unknown) {
     if (error instanceof FarmUrlError) throw new UsageError(error.message);
     throw error;
   }
+}
+
+// why: remote mode needs a valid URL and a token before anything connects, for a command that connects (`connectFarm`), for `simlock mcp`, which connects only on a tool call, and for the HTTP commands (`simlock files`), so all refuse the same input with the same words.
+export async function checkedFarm(
+  farm: RemoteFarm,
+): Promise<{ url: string; token: string; allowInsecureHttp: boolean }> {
+  const { farmTokenFits } = await import("../simlock-client/farm-url.js");
+  const { allowInsecureHttp, url } = await checkedFarmOrigin(farm.url, farm);
   if (farm.token === undefined || !farmTokenFits(farm.token)) {
     throw new UsageError("No token: pass --token or set SIMLOCK_TOKEN");
   }
-  return { token: farm.token, url };
+  return { allowInsecureHttp, token: farm.token, url };
 }
 
 // why: remote mode never falls back to an agent session or launches a daemon (ADR 0081 §3): the token decides the role, and there is no local daemon to fall back to.
@@ -59,11 +73,12 @@ async function connectFarm(
   environment: CliEnvironment,
   farm: RemoteFarm,
 ): Promise<SimlockAdminClient> {
-  const [{ connectSimlockAdmin }, { token, url }] = await Promise.all([
+  const [{ connectSimlockAdmin }, { allowInsecureHttp, token, url }] = await Promise.all([
     import("../admin/index.js"),
     checkedFarm(farm),
   ]);
   return connectSimlockAdmin({
+    allowInsecureHttp,
     clock: environment.clock,
     token,
     url,

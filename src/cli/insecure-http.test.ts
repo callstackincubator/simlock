@@ -10,7 +10,10 @@ interface Setup {
 }
 
 function session(setup: Setup = {}) {
-  const farm = new FakeFarm({ "status.get": () => EMPTY_STATUS });
+  const farm = new FakeFarm({
+    "identity.get": () => ({ name: "ci", principal: "tok_1", role: "agent", via: "token" }),
+    "status.get": () => EMPTY_STATUS,
+  });
   const output = outputCapture();
   const connectAdmin = vi.fn(async () => fakeClient());
   const environment = output.environmentWith({

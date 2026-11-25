@@ -11,7 +11,11 @@ export class FarmUrlError extends Error {
 }
 
 // why: the one rule for a farm's URL, shared by `simlock tunnel` and the remote typed client (ADR 0081 §3): https, or http for loopback only, and the origin alone. The scheme is judged before the origin. `name` is how the caller calls the value (`--url`, `` `url` ``), and the result is the farm's origin.
-export function checkedFarmUrl(text: string, name: string): string {
+export function checkedFarmUrl(
+  text: string,
+  name: string,
+  insecure: { readonly allowed: boolean; readonly hint: string },
+): string {
   let parsed: URL | undefined;
   try {
     parsed = new URL(text);
@@ -21,7 +25,7 @@ export function checkedFarmUrl(text: string, name: string): string {
   const allowed =
     parsed !== undefined &&
     (parsed.protocol === "https:" ||
-      (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname)));
+      (parsed.protocol === "http:" && (insecure.allowed || LOOPBACK_HOSTS.has(parsed.hostname))));
   if (parsed === undefined || !allowed || text.length > MAX_URL_CHARS) {
     throw new FarmUrlError(
       `${name} must be https://, or http:// only for 127.0.0.1, [::1] or localhost`,

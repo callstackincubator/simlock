@@ -34,6 +34,7 @@ export interface RemoteConnectInput {
   readonly webSocket?: WebSocketClientConnector;
   readonly clock?: Clock;
   readonly signal?: AbortSignal;
+  readonly allowInsecureHttp?: boolean;
   // why: the options of the local transport, which a URL replaces (the token's id is the principal) and so refuses to share a call with.
   readonly principal?: string;
   readonly connection?: unknown;
@@ -58,7 +59,10 @@ export function remoteConnectOptions(input: RemoteConnectInput): ConnectOptions 
   }
   let origin: string;
   try {
-    origin = checkedFarmUrl(input.url, "`url`");
+    origin = checkedFarmUrl(input.url, "`url`", {
+      allowed: input.allowInsecureHttp === true,
+      hint: "set `allowInsecureHttp: true`",
+    });
   } catch (error: unknown) {
     if (error instanceof FarmUrlError) throw new TypeError(error.message);
     throw error;
