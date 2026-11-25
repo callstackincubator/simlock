@@ -132,9 +132,10 @@ export class Seeds {
     const orphans = await this.#orphanSources();
     if (rows.length === 0) return orphans;
     const catalog = await this.#simctl.loadCatalog();
+    const folders = new Set(await this.#sourceFolders());
     return [
       ...rows.map((row) => {
-        const staleReason = sourceStaleReason(row, catalog);
+        const staleReason = sourceStaleReason(row, catalog, folders);
         return {
           id: row.sourceId,
           kind: row.kind,
@@ -490,12 +491,21 @@ export class Seeds {
     }
   }
 
+  /** why: a seed deleted by hand leaves a ready row whose simulator is not in the sources set. */
+  async #folderGone(udid: string): Promise<boolean> {
+    return !(await this.#sourceFolders()).includes(udid);
+  }
+
   async #namedSource(sourceId: string): Promise<ReadySeed> {
     const row = this.#sources.findRow(sourceId);
     if (row?.state !== "ready" || row.udid === undefined) {
       throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
     }
-    const reason = sourceStaleReason(row, await this.#simctl.loadCatalog());
+    const reason = sourceStaleReason(
+      row,
+      await this.#simctl.loadCatalog(),
+      new Set(await this.#sourceFolders()),
+    );
     if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
     return {
       lineage: row.lineage,
@@ -523,8 +533,13 @@ export class Seeds {
 
   async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
     const seed = this.#sources.findReadySeed(specKey);
-    if (seed !== undefined && !seedIsStale(seed, resolved)) return seed;
-    if (seed !== undefined) await this.#destroySeed(seed);
+    if (seed !== undefined && !(await this.#folderGone(seed.udid))) {
+      if (!seedIsStale(seed, resolved)) return seed;
+      await this.#destroySeed(seed);
+    } else if (seed !== undefined) {
+      // why: safety rule 1: a seed whose simulator is gone has nothing left to delete, so its row goes and no `simctl` call is made.
+      this.#sources.deleteRow(seed.sourceId);
+    }
     return this.#makeSeed(resolved, specKey);
   }
 
@@ -799,13 +814,30 @@ function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
   return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
 }
 
-/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
-function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
+/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id; a simulator gone from the sources set is told last, with what to do, so a missing runtime is told first. */
+function sourceStaleReason(
+  row: SourceRow,
+  catalog: SimctlCatalog,
+  folders: ReadonlySet<string>,
+): string | undefined {
   if (row.kind === "baseline" && row.lineage === undefined) {
     return row.savedWithoutLineage
       ? "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease"
       : "saved before simulators stopped sharing folders; save it again";
   }
+  return (
+    catalogStaleReason(row, catalog) ??
+    (row.udid !== undefined && !folders.has(row.udid) ? goneReason(row) : undefined)
+  );
+}
+
+function goneReason(row: SourceRow): string {
+  return row.kind === "baseline"
+    ? "its simulator is gone; save it again"
+    : "its simulator is gone; the next lease of its kind makes it again";
+}
+
+function catalogStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
   const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
   if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
   if (

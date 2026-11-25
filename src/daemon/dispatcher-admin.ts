@@ -51,7 +51,10 @@ export class AdminHandlers {
 
   readonly nukeRun: Handler<"nuke.run"> = async (input) => {
     if (this.options.nuke === undefined) throw new NukeUnavailableError();
-    return this.options.nuke.run({ deleteDevices: input.deleteDevices ?? false });
+    return this.options.nuke.run({
+      deleteDevices: input.deleteDevices ?? false,
+      ...(input.platform === undefined ? {} : { platform: input.platform }),
+    });
   };
 
   readonly tokenCreate: Handler<"token.create"> = async (input) => {

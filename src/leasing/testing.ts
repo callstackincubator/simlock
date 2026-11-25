@@ -142,7 +142,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     releaseRun: (runId, ownerId) => leasing.releaseRun(runId, ownerId),
     renew: (leaseId, ttlMs) => leasing.renew(leaseId, ttlMs),
     expire: (leaseId) => leasing.expire(leaseId),
-    nuke: (deleteDevices) => core.nuke.nuke(deleteDevices),
+    nuke: (deleteDevices, platform) => core.nuke.nuke(deleteDevices, platform),
     async convergeRunningCapacity() {
       await leasing.settleRequests();
       const read = await core.readStartup();

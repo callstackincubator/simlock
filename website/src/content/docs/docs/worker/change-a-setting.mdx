@@ -184,7 +184,7 @@ How the windows behave, and what `drivers.ios.deviceSet default` changes for Xco
 macOS only. Do it when no lease is active: the old set must be empty.
 
 <Aside type="caution">
-`simlock nuke --delete-devices` ends every lease and deletes every simulator and emulator Simlock made.
+`simlock nuke --delete-devices --platform ios` ends every iOS lease and deletes every iOS simulator, seed and baseline Simlock made. Android is left as it is.
 </Aside>
 
 <Steps>
@@ -192,7 +192,7 @@ macOS only. Do it when no lease is active: the old set must be empty.
 1. With the old setting still in place, clear the old set. If you set `drivers.ios.deviceRoot`, keep it set for these two commands:
 
    ```sh
-   simlock nuke --delete-devices
+   simlock nuke --delete-devices --platform ios
    simlock doctor --purge-orphans
    ```
 

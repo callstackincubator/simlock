@@ -57,7 +57,7 @@ Baselines (ADR 0061 §4):
 
 - One save or remove at a time. A save: leasing's `releaseToSave` ends the lease, then `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim. A driver failure quarantines the device and answers `BASELINE_SAVE_FAILED`.
 - A replace keeps the leased devices of older versions. An older version is dropped only when no device record and no provision (`hold`) has it; that is checked after a save, on every `device.deleted` and at startup.
-- `remove` refuses a baseline a lease uses, and destroys each source before its row. `removeAll` (nuke) deletes rows first.
+- `remove` refuses a baseline a lease uses, and destroys each source before its row. `removeAll` (nuke) deletes rows first, only the platform's when nuke names one.
 - `checkStale` runs before `list` and `doctor`, after `component.removed`, after a save, and at startup. A failure is logged and goes on, except before `list`, which fails with it.
 
 ## Known gaps

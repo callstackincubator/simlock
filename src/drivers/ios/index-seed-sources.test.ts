@@ -161,10 +161,17 @@ describe("IosSimctlDriver", () => {
     { name: "an unknown source is refused", id: "nope", cloned: false },
     { name: "a stale source is refused", id: "planted-old", cloned: false },
     { name: "a source with no lineage is refused", id: "planted-unlineaged", cloned: false },
-  ])("provision with a source: $name", async ({ id, cloned }) => {
+    {
+      name: "a baseline whose simulator is gone is refused with what to do",
+      id: "planted-gone",
+      cloned: false,
+      refusal: "source planted-gone is stale: its simulator is gone; save it again",
+    },
+  ])("provision with a source: $name", async ({ id, cloned, refusal }) => {
     const namedUdid = "00000000-0000-0000-0000-0000000000bb";
     const oldUdid = "00000000-0000-0000-0000-0000000000cc";
     const unlineagedUdid = "00000000-0000-0000-0000-0000000000dd";
+    const goneUdid = "00000000-0000-0000-0000-0000000000ff";
     const database = await seededDatabase();
     const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
     const namedLineage = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB";
@@ -187,6 +194,15 @@ describe("IosSimctlDriver", () => {
     database
       .prepare("UPDATE ios_source_data SET source_id = 'planted-unlineaged' WHERE udid = ?")
       .run(unlineagedUdid);
+    plantSource(database, {
+      ...kind,
+      kind: "baseline",
+      lineage: [namedLineage],
+      udid: goneUdid,
+    });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-gone' WHERE udid = ?")
+      .run(goneUdid);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
     await plantSeedClone(filesystem);
@@ -208,7 +224,20 @@ describe("IosSimctlDriver", () => {
         result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
       },
     ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+    // why: `createDriver` plants a folder for every ready row; the gone source's folder is the one a deleted simulator leaves missing.
+    const driver = await createDriver(
+      runner,
+      new FakeClock(),
+      filesystem,
+      database,
+      undefined,
+      undefined,
+      {},
+      id !== "planted-gone",
+    );
+    if (id !== "planted-gone") {
+      await plantSeedClone(filesystem, sourcesSetPath, namedUdid);
+    }
 
     const provisioned = driver.provision(spec, { source: id });
 
@@ -228,6 +257,7 @@ describe("IosSimctlDriver", () => {
       ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
     } else {
       await expect(provisioned).rejects.toBeInstanceOf(DriverCrashError);
+      if (refusal !== undefined) await expect(provisioned).rejects.toThrow(refusal);
       expect(runner.calls.map((call) => call.args[3])).not.toContain("clone");
     }
   });
@@ -518,7 +548,11 @@ describe("IosSimctlDriver", () => {
     edit: (catalog: Catalog) => void;
     planted?: Partial<PlantedSource>;
     persists?: true;
+    /** why: the sources set no longer holds the source's simulator. */
+    gone?: true;
     reason: string | undefined;
+    /** why: the reason of the second read, when the catalog is back, where it differs from a reason that persists. */
+    later?: string;
   }>([
     { name: "healthy", edit: () => undefined, reason: undefined },
     {
@@ -575,9 +609,35 @@ describe("IosSimctlDriver", () => {
       },
       reason: `device type ${driverData.deviceTypeId} is not available`,
     },
+    {
+      name: "a seed's simulator is gone, which a new simulator does not clear",
+      edit: () => undefined,
+      gone: true,
+      persists: true,
+      reason: "its simulator is gone; the next lease of its kind makes it again",
+    },
+    {
+      name: "a baseline's simulator is gone, which a new simulator does not clear",
+      edit: () => undefined,
+      gone: true,
+      persists: true,
+      planted: { kind: "baseline", lineage: ["AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"] },
+      reason: "its simulator is gone; save it again",
+    },
+    {
+      name: "its runtime is gone and so is its simulator, so the runtime is named first, and the simulator once the runtime is back",
+      edit: (catalog: Catalog) => {
+        catalog.runtimes = catalog.runtimes.filter(
+          (entry) => entry.identifier !== driverData.runtimeId,
+        );
+      },
+      gone: true,
+      later: "its simulator is gone; the next lease of its kind makes it again",
+      reason: `runtime ${driverData.runtimeId} is not installed`,
+    },
   ])(
     "lists a ready source with its model, version and size, and its staleReason when $name, which clears once it is back",
-    async ({ edit, persists, planted, reason }) => {
+    async ({ edit, gone, later, persists, planted, reason }) => {
       const catalogOf = (change: (catalog: Catalog) => void) => {
         const catalog = JSON.parse(listFixture) as Catalog;
         for (const entry of catalog.runtimes) {
@@ -601,7 +661,16 @@ describe("IosSimctlDriver", () => {
         udid: seedUdid,
         ...planted,
       });
-      const driver = await createDriver(runner, new FakeClock(), undefined, database);
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        undefined,
+        database,
+        undefined,
+        undefined,
+        {},
+        gone !== true,
+      );
 
       expect(await driver.listSources()).toMatchObject([
         {
@@ -614,7 +683,8 @@ describe("IosSimctlDriver", () => {
       ]);
       // why: a lineage the source never had does not come back with the catalog, so its reason stays.
       const again = (await driver.listSources())[0];
-      if (persists === true) expect(again).toHaveProperty("staleReason", reason);
+      if (later !== undefined) expect(again).toHaveProperty("staleReason", later);
+      else if (persists === true) expect(again).toHaveProperty("staleReason", reason);
       else expect(again).not.toHaveProperty("staleReason");
       expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list"]);
     },

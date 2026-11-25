@@ -546,7 +546,7 @@ simlock doctor [--fix] [--purge-orphans] [--yes]
 | `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Also destroy every orphan source: a seed simulator with no record, or a saved baseline's copy that no baseline names. Needs the admin role. Asks for confirmation. | Off |
 | `--yes` | Skip the confirmation for `--purge-orphans`. Required when there is no terminal to ask in. | Off |
 
-The report also lists, under `sources`, the copies on disk that new devices are made from. Each has `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and, for a seed, `settled` (whether its background settle is done) and `leases` (how many devices it has made for leases), and `staleReason` when it no longer matches the installed runtime, or when an iOS baseline was saved before simulators stopped sharing folders, or from a lease made before that. A baseline source also has `baselineName` and `baselineVersion`. A seed is a simulator Simlock copies to make each iOS simulator a lease gets: it takes disk space but is never leased. A seed with no record, or a baseline copy no baseline names, shows `orphan: true`. That is not a finding; only `--purge-orphans` deletes it.
+The report also lists, under `sources`, the copies on disk that new devices are made from. Each has `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and, for a seed, `settled` (whether its background settle is done) and `leases` (how many devices it has made for leases), and `staleReason` when it no longer matches the installed runtime, or when its iOS simulator was deleted by hand, or when an iOS baseline was saved before simulators stopped sharing folders, or from a lease made before that. A baseline source also has `baselineName` and `baselineVersion`. A seed is a simulator Simlock copies to make each iOS simulator a lease gets: it takes disk space but is never leased. A seed with no record, or a baseline copy no baseline names, shows `orphan: true`. That is not a finding; only `--purge-orphans` deletes it.
 
 On a worker whose login service names a Node or `main.js` that is gone, the report holds a `service-broken` finding and stderr gets `Service broken: <name> (<manager>) names missing <path>. Run `simlock daemon install` again.` (`<path>, <path>` for two).
 
@@ -605,16 +605,17 @@ simlock 0.4.0 is running
 Emergency reset: end every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Free disk space and reset a machine](/simlock/docs/worker/free-disk).
 
 <Aside type="danger">
-`nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages, every seed and every baseline. A source with no record (an orphan) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
+`nuke` ends every agent's lease on this machine at once, or only those of the platform `--platform` names. With `--delete-devices` it also deletes every device Simlock manages, every seed and every baseline, of both platforms or of that one. A source with no record (an orphan) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
 </Aside>
 
 ```text
-simlock nuke [--delete-devices] [--yes]
+simlock nuke [--delete-devices] [--platform <ios|android>] [--yes]
 ```
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--delete-devices` | Also delete every device, seed and baseline Simlock manages. | Off |
+| `--platform` | Reset one platform, `ios` or `android`: end its leases, stop its devices, and make the warm pool forget its kinds; with `--delete-devices` it also deletes its devices, seeds and baselines. The other platform is left as it is. Any other value is a usage error. | Both platforms |
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
@@ -756,7 +757,7 @@ login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11
   stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
 ```
 
-A baseline is stale when the runtime, system image or emulator it was made with changed after the save; the reason is on its own line under the row. The size is `-` when it could not be counted, and the saved time is the worker's local time. With none it prints `No baselines on this worker.` On a gateway it lists every worker's baselines with the worker's id in a `WORKER` column first, and prints `No baselines on any worker.` for none.
+A baseline is stale when the runtime, system image or emulator it was made with changed after the save, or when an iOS simulator it was saved as was deleted by hand; the reason is on its own line under the row. The size is `-` when it could not be counted, and the saved time is the worker's local time. With none it prints `No baselines on this worker.` On a gateway it lists every worker's baselines with the worker's id in a `WORKER` column first, and prints `No baselines on any worker.` for none.
 
 ### simlock baseline remove
 

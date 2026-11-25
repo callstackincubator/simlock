@@ -32,6 +32,7 @@ import {
   listFixture,
   listInvocation,
   plantLaunchServices,
+  plantSeedClone,
   prepareFull,
   scopedRunners,
   seedUdid,
@@ -232,6 +233,7 @@ describe("IosSimctlDriver", () => {
       await filesystem.writeFileAtomic(recordPath(seedUdid), '["a.b"]');
     }
     await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    await plantSeedClone(filesystem);
     filesystem.failing = failing;
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },

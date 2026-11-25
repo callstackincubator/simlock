@@ -78,7 +78,10 @@ export interface PassthroughResolver {
 
 /** Operator reset capability used by the nuke command facade. */
 export interface NukeExecutor {
-  nuke(deleteDevices: boolean): Promise<{
+  nuke(
+    deleteDevices: boolean,
+    platform?: Platform,
+  ): Promise<{
     readonly releasedLeaseIds: readonly string[];
     readonly removedBaselines: readonly string[];
   }>;
