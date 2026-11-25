@@ -32,7 +32,6 @@ import {
   positiveInteger,
   positiveNumber,
   requireObject,
-  stringArray,
   stringUnion,
   stringValue,
   type Validator,
@@ -161,7 +160,7 @@ export function configValidators(
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
-    tags: stringArray,
+    tags: tagsValidator(modules),
     gateway: objectValidator({
       url: stringValue,
       token: stringValue,
@@ -325,6 +324,36 @@ function capabilitiesValidator(modules: readonly ModuleConfigEntry[]): Validator
       };
     }
     return result;
+  };
+}
+
+/** why: the capability name pattern of the contract (`capabilityNameSchema`), repeated here because core never imports the contract; a tag is a capability a lease can require. */
+const TAG_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+const MAX_TAGS = 8;
+
+/** why: ADR 0091 §1: a tag that names a module would hide that module's real state, so it is refused, also after an update adds such a module. */
+function tagsValidator(modules: readonly ModuleConfigEntry[]): Validator {
+  return (value, path) => {
+    if (!Array.isArray(value)) throw invalidValue(path, "a list of tag names");
+    value.forEach((name, index) => {
+      if (typeof name !== "string" || !TAG_NAME_PATTERN.test(name)) {
+        throw invalidValue(
+          `${path}[${String(index)}]`,
+          "a name of 1 to 32 lowercase letters, digits and hyphens that starts with a letter",
+        );
+      }
+    });
+    const names = value as readonly string[];
+    if (names.length > MAX_TAGS) throw invalidValue(path, `at most ${String(MAX_TAGS)} names`);
+    const twice = names.find((name, index) => names.indexOf(name) !== index);
+    if (twice !== undefined) {
+      throw invalidValue(path, `each name once, "${twice}" is listed twice`);
+    }
+    const moduleName = names.find((name) => modules.some((entry) => entry.name === name));
+    if (moduleName !== undefined) {
+      throw invalidValue(path, `no module name, "${moduleName}" names an optional module`);
+    }
+    return names;
   };
 }
 
