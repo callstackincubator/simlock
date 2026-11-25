@@ -30,6 +30,7 @@ function leaseRequestNameFields(body: z.infer<typeof leaseRequestBodySchema>) {
     ...(body.runId === undefined ? {} : { runId: body.runId }),
     ...(body.label === undefined ? {} : { label: body.label }),
     ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
+    ...(body.requires === undefined ? {} : { requires: body.requires }),
   };
 }
 
