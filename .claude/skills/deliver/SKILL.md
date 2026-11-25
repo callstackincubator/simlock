@@ -230,7 +230,8 @@ they name; never build again or restart review at round 1.
      `hardware-verifier` with the PR, the branch and those lines, on the
      commit the review passed (rule 16). On `fail`, the hardware loop: one
      `implementer` run with `mode: hardware-fix`, the Evidence lines and
-     the report's `load` under `fixes`, then `hardware-verifier` again on
+     the load from the report's `Ran:` line under `fixes`, and `previous
+     <the commit the review passed>`, then `hardware-verifier` again on
      its head; repeat until `pass`, with no review in between. Every
      verifier run of the loop gets `attempt: <n>`, counting from 1. A
      `base fails:` line in a fix report is a
