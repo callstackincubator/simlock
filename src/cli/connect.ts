@@ -43,7 +43,11 @@ export async function checkedFarmOrigin(
   opt: Pick<RemoteFarm, "allowInsecureHttpFlag" | "allowInsecureHttpVariable">,
 ): Promise<{ url: string; allowInsecureHttp: boolean }> {
   const { checkedFarmUrl, FarmUrlError } = await import("../simlock-client/farm-url.js");
-  const allowInsecureHttp = opt.allowInsecureHttpFlag || opt.allowInsecureHttpVariable === "1";
+  const variable = opt.allowInsecureHttpVariable;
+  if (variable !== undefined && variable !== "" && variable !== "1") {
+    throw new UsageError("SIMLOCK_ALLOW_INSECURE_HTTP must be 1, or unset");
+  }
+  const allowInsecureHttp = opt.allowInsecureHttpFlag || variable === "1";
   try {
     const url = checkedFarmUrl(text, "--url", {
       allowed: allowInsecureHttp,

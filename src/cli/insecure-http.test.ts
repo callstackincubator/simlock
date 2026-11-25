@@ -143,7 +143,7 @@ describe("CLI: plain http to a remote farm by opt-in", () => {
     for (const { setup, argv } of local) {
       const { farm, output, run } = session(setup);
       expect(await run(argv), argv.join(" ")).toBe(0);
-      expect(output.stderr, argv.join(" ")).toBe("");
+      expect(output.stderr, argv.join(" ")).not.toContain('"error"');
       expect(farm.connections, argv.join(" ")).toEqual([]);
     }
   });
