@@ -102,7 +102,7 @@ export class ConnectionRequests {
     return undefined;
   }
 
-  // fallow-ignore-next-line complexity -- one case per request type; the arms that need a connection's own wiring are cases, the rest sit in `PASSTHROUGH_OPERATIONS`.
+  // fallow-ignore-next-line complexity -- why: a switch over request types where only the arms that need a connection's own wiring are cases; the rest sit in `PASSTHROUGH_OPERATIONS`.
   async handle(
     connection: Connection,
     frame: RequestFrame,
