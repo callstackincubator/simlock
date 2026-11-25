@@ -342,6 +342,18 @@ export default {
       "^src/contract/",
       { couldNotResolve: true, path: "^[./]" },
     ),
+    direction(
+      "shared-imports-nothing",
+      "shared imports nothing: no component, no package and no Node module, so any component may depend on it",
+      "^src/shared/",
+      { path: "^[^.]", pathNot: "^src/shared/" },
+    ),
+    direction(
+      "shared-imports-nothing-unresolved",
+      "shared imports nothing: no component, no package and no Node module, so any component may depend on it",
+      "^src/shared/",
+      { couldNotResolve: true, path: "^[./]" },
+    ),
   ],
   options: {
     doNotFollow: { path: ["node_modules", "^dist/"] },
