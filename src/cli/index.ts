@@ -65,6 +65,8 @@ sends; the CLI reference lists the default resolution order.
 Pass --url <url> anywhere on the command line (or set SIMLOCK_URL and SIMLOCK_TOKEN) to run
 the command on a remote worker or gateway instead of this machine's daemon.
 
+Pass --allow-insecure-http anywhere on the command line (or set SIMLOCK_ALLOW_INSECURE_HTTP=1) to let --url or SIMLOCK_URL use plain http to a host that is not this machine; the token is then sent unencrypted.
+
 Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.
 Pass --local anywhere on the command line to reach this machine's worker even when only a gateway has run here.`;
 
