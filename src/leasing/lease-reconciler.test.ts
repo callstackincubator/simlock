@@ -358,6 +358,8 @@ describe("LeaseReconciler", () => {
 
     await reconciler.run(read({ ios: reality(["d2", "stopped"]) }));
 
+    // why: The reconciler read the reloaded snapshot, where the orphan has no device; the ender acts on
+    // the harness's own registry, where it was never touched.
     expect(harness.registry.snapshot.leases.map((kept) => kept.id)).toEqual([orphan.id]);
     expect(
       harness.eventBus

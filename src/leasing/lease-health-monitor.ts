@@ -270,6 +270,7 @@ export class LeaseHealthMonitor {
       return;
     }
     if (this.#inFlight.size >= this.options.config.health.maxConcurrentRecoveries) {
+      // why: Cap reached; this device's counters stay elevated and it is retried next tick.
       return;
     }
     this.#inFlight.add(device.id);

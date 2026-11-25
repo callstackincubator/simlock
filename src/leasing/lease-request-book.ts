@@ -431,6 +431,7 @@ function sameNames(
   return left.size === right.size && [...left].every((name) => right.has(name));
 }
 
+/** why: An omitted field equals only an omitted one: a request naming no mode is not one naming the worker's default. */
 function sameDeviceRequest(left: DeviceRequest, right: DeviceRequest): boolean {
   return (
     SAME_DEVICE_FIELDS.every((field) => left[field] === right[field]) &&

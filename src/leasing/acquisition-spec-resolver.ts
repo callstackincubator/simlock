@@ -314,6 +314,17 @@ export class AcquisitionSpecResolver {
     };
   }
 
+  /**
+   * why: Resolves the request; when its runtime is missing, a download could supply it, and the
+   * request may download, asks the installer for it and resolves once more. The installer skips
+   * the install when, by the time this call reaches the front of its queue, `resolveSpec` no
+   * longer fails with `RuntimeMissingError` -- another install made the runtime available.
+   * Without `allowDownload` the first failure stands and the installer is never called.
+   *
+   * The installer's reports reach the requester as the `downloading` stage, through the queue
+   * like every other stage. A report equal to the last one sent is skipped, so a percentage is
+   * sent once per whole number.
+   */
   async #resolveOrInstall(
     onProgress: (progress: DownloadingProgress) => void,
     driver: Driver,

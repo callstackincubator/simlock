@@ -255,6 +255,8 @@ describe("LeaseAcquisitionCoordinator", () => {
   );
 
   it("releases the running slot reserved to boot a shut-down device for a waiter when the boot fails and another boot claims the device before it is destroyed", async () => {
+    // why: The warm pool's boot reserves its own slot and claims the device in one decision. Here it
+    // lands after the failed boot has released its claim and before the destroy claims the device.
     let raced = false;
     let warmBoot: { release(): void } | undefined;
     const harness = await createHarness({

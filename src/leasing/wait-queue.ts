@@ -10,6 +10,10 @@ import { type WaitingReason } from "./acquisition-planner.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
+  /** why: ADR 0003 §4: the session principal the resulting lease is owned by -- distinct from
+   * `requesterId`, which is attribution and defaults to the principal but may be set to
+   * something else per request. Required: every caller of `LeaseCommands.request` (the daemon
+   * dispatcher) always knows its own session's principal. */
   readonly ownerId: string;
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
@@ -20,6 +24,10 @@ export interface LeaseRequestOptions {
    * `lease.defaultTtlMs`; the cap against `lease.maxTtlMs` is applied at the daemon boundary
    * before a request ever reaches here, so this type trusts what it is given. */
   readonly ttlMs?: number;
+  /**
+   * why: The caller's key for repeating this request (see `LeaseRequestBook`). Paired with
+   * `requesterId`; both are the caller's own claims, so a replay is authorized on `ownerId`.
+   */
   readonly idempotencyKey?: string;
   /**
    * why: ADR 0020: the lease ID the requester chose. The granted lease has exactly this ID; a live
@@ -30,6 +38,10 @@ export interface LeaseRequestOptions {
   readonly leaseId?: string;
   readonly runId?: string;
   readonly label?: string;
+  /**
+   * why: ADR 0021: the gateway's request id. A request that has one is a probe: its refusals and
+   * failures are `lease.declined`, and it is never queued. Set only for the gateway's uplink.
+   */
   readonly fleetRequestId?: string;
   readonly onAdmitted?: (requestId: string, replayed: boolean) => void;
 }

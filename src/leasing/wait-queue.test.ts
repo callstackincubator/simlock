@@ -224,6 +224,18 @@ describe("WaitQueue", () => {
     expect(timedOut).toHaveBeenCalledWith(waiter);
   });
 
+  // why: H5 (round 3 review): this test used to claim it proved a re-enqueue "re-arms only the time
+  // actually remaining" -- but every assertion in it (the waiter's `state` at various clock
+  // ticks, and when its promise finally rejects) would come out identical whether `#armTimeout`
+  // actually cancelled the original timer and started a fresh one for the recomputed remainder,
+  // or simply left that still-live timer alone. Both mechanisms hit the same fixed `deadlineAt`.
+  // The `setTimer` spy below is what tells them apart: it asserts directly on the *mechanism* --
+  // exactly one timer is ever armed across the whole `queued -> processing -> queued` cycle, not
+  // two -- which is what `#armTimeout`'s own doc comment now documents as the only thing that
+  // can happen (its `waiter.timer !== undefined` guard makes a genuine recompute-and-re-arm
+  // unreachable through this class's public API). The externally observed timing this test also
+  // pins is real and worth keeping; it just is not, on its own, evidence of which mechanism
+  // produced it.
   it("leaves a still-live timer alone across a queued -> processing -> queued cycle, rather than cancelling and re-arming it, so the total wait never exceeds the original timeoutMs (H5, round 3 review)", async () => {
     const { clock, queue } = createQueue();
     const waiter = createWaiter(queue, "agent", { timeoutMs: 100 });

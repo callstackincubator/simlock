@@ -205,6 +205,8 @@ describe("LeaseLifecycle", () => {
     });
     await afterLifecycle.restoreExpiryTimers();
 
+    // why: Advance to (and past) the original grant-time deadline: a restart that restored the
+    // stale grant-time deadline instead of the renewed one would have expired the lease here.
     afterClock.advance(20);
     await new Promise((resolve) => setImmediate(resolve));
     expect(afterRegistry.snapshot.leases).toHaveLength(1);
