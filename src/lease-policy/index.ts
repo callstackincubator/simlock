@@ -536,9 +536,12 @@ export async function slimLeaseHint(input: {
   readonly client: SlimHintClient;
   readonly grant: SlimHintGrant;
 }): Promise<string | undefined> {
+  const { device } = input.grant;
+  if (device.physical || device.mode !== "slim" || device.spec.platform !== "ios") return undefined;
   const catalog = await input.client.getCatalog();
   const ios = catalog.platforms.find((entry) => entry.platform === "ios");
-  const off = ios?.slimCategories ?? [];
+  const kept = new Set(device.except ?? []);
+  const off = (ios?.slimCategories ?? []).filter((name) => !kept.has(name));
   if (off.length === 0) return undefined;
   return `Slim simulator: ${off.join(", ")} are turned off. Lease again with except naming a category to keep it running, or with mode full to keep them all.`;
 }
