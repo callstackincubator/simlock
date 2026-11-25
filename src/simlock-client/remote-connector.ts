@@ -57,6 +57,9 @@ export function remoteConnectOptions(input: RemoteConnectInput): ConnectOptions 
       "`url` cannot be combined with `connection`, `endpoint`, `ipc`, `credential` or `principal`",
     );
   }
+  if (input.allowInsecureHttp !== undefined && typeof input.allowInsecureHttp !== "boolean") {
+    throw new TypeError("`allowInsecureHttp` must be true or false");
+  }
   let origin: string;
   try {
     origin = checkedFarmUrl(input.url, "`url`", {
