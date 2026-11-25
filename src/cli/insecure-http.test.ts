@@ -147,4 +147,11 @@ describe("CLI: plain http to a remote farm by opt-in", () => {
       expect(farm.connections, argv.join(" ")).toEqual([]);
     }
   });
+
+  it("the --help text names the opt-in", async () => {
+    const { output, run } = session();
+    expect(await run(["--help"])).toBe(0);
+    expect(output.stdout).toContain("--allow-insecure-http");
+    expect(output.stdout).toContain("SIMLOCK_ALLOW_INSECURE_HTTP=1");
+  });
 });
