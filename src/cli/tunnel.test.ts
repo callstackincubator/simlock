@@ -240,13 +240,23 @@ describe("simlock tunnel that runs", () => {
         url: "ws://100.75.181.35:7300/v1/leases/L1/tunnel",
       })),
       {
+        argv: ["reverse", "5173", "--local", "--lease", "L1"],
+        env: {
+          ...ENV,
+          SIMLOCK_ALLOW_INSECURE_HTTP: "1",
+          SIMLOCK_URL: "http://100.75.181.35:7300",
+        },
+        lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
+        url: "ws://100.75.181.35:7300/v1/leases/L1/tunnel",
+      },
+      {
         argv: ["reverse", "5173"],
         lines: ["reverse device:5173 -> localhost:5173 (lease only)"],
         url: "ws://127.0.0.1:7300/v1/leases/only/tunnel",
       },
     ];
-    for (const { argv, authorization, lines, url } of ok) {
-      const cli = command(ENV);
+    for (const { argv, authorization, env, lines, url } of ok) {
+      const cli = command(env ?? ENV);
       cli.httpJson.answers.set("http://127.0.0.1:7300/v1/identity", {
         body: { role: "agent" },
         status: 200,
