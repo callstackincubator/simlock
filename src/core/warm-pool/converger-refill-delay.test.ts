@@ -90,6 +90,13 @@ describe("warm pool refill delay", () => {
         options: { targets: [pixel] },
       },
       {
+        name: "a wait that ends between two ticks starts on its own timer",
+        at: 45_000,
+        devices: [leased("l1"), device("s1", "shutdown", 0)],
+        grants: [[0, "l1"]],
+        options: { refillDelayMs: 45_000, targets: [iphone15] },
+      },
+      {
         name: "a target that would displace a learned device",
         at: 60_000,
         devices: [leased("l1"), pad],
@@ -98,7 +105,7 @@ describe("warm pool refill delay", () => {
       },
     ];
     for (const { name, at, devices, grants, options } of table) {
-      const rig = harness(devices, { ...options, refillDelayMs });
+      const rig = harness(devices, { refillDelayMs, ...options });
       const missed: string[] = [];
       rig.eventBus.subscribe("warm-pool.target-missed", ({ payload }) => {
         missed.push(payload.model);
@@ -182,6 +189,8 @@ describe("warm pool refill delay", () => {
     grant(zero, "l1");
     await zero.pool.settle();
     expect(zero.bootCalls, "0 and a grant").toEqual(["s1"]);
+    expect(zero.clock.pendingTimerCount, "0 starts no wait timer").toBe(1);
+    zero.pool.dispose();
 
     const fresh = harness([device("s1", "shutdown", 0)], { refillDelayMs, targets: [iphone15] });
     fresh.pool.start();
