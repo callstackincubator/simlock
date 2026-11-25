@@ -21,7 +21,7 @@ Session:
 - The API client reports a 401, or an answer that is not Simlock's, to the session. In a proxy session that starts the one shared check in `src/data/identity-check.ts`; in a token session a 401 forgets the token and asks for it.
 - The live connection asks `session.lost()` when it loses the stream. In a proxy session that is the same check, and its answer is to reconnect at once, back off as for an unreachable daemon, or stop while the session ends.
 - `src/data/mode.ts` reads the daemon's mode and versions once the live connection starts and again after each reconnect. It repeats the read on a timer (`RE_READ_MS`) because the daily update check emits no event. A failed repeat keeps the last values, and the timer stops with the live connection.
-- The worker actions are offered only when `useDaemonMode` says `gateway`; while the mode is unknown the console never guesses it.
+- Worker actions need `useDaemonMode` `gateway`; `useActions` and search gate mutations on `useCanAct` (`admin`, closed until known), and `viewer` shows `Read-only` in sidebar.
 
 Reads:
 
@@ -32,12 +32,12 @@ Reads:
 - A read sends back the ETag of the route's last answer. A `304` keeps the cached data object, so nothing re-renders; one that finds its data dropped is read again without a tag.
 - A `lease.renewed` event moves the lease's deadline in `['leases']` and `['workers']` in place (`src/model/renewal.ts`) with no read of those lists, and the moved deadline is kept for a while (`RENEWAL_KEPT_MS`) against an older answer.
 - The Inbox is the daemon's: `GET /v1/inbox` answers the items, by the rules in the repo root's `src/contract/inbox.ts`. `['inbox']` is the only key the sidebar's count reads, and events that mark workers, leases or requests stale mark it too. `src/model/inbox.ts` only draws the items.
-- The Inbox drawer and the lease drawer share one list of recent events per tab (`src/data/recent-feed.ts`, held by `LiveProvider`); it is dropped a while after its last user closes (ADR 0044 §1).
+- The Inbox drawer and lease drawer share one recent-events list per tab (`src/data/recent-feed.ts`, held by `LiveProvider`); it drops a while after its last user closes (ADR 0044 §1).
 
 Actions and search:
 
 - An action is described once per kind of item in `src/model/actions.ts` (ADR 0037 §3). A screen never builds one.
-- `useActions().run` (`src/state/actions.ts`) is the one runner: it confirms, writes and notifies, and keeps an in-flight flag per item key, shared by the row, the drawer, the Inbox and the search, so a second click sends nothing.
+- `useActions().run` (`src/state/actions.ts`) is the one runner: it confirms, writes, notifies, and keeps an in-flight flag per item key across row, drawer, Inbox and search, blocking double clicks.
 - A write goes through the same path as a read, but a network error or a timeout on a write throws without asking whether the session ended.
 - The search keeps each read as it stood the first time it settled, so a group fills in once and then never changes while the dialog is open.
 - The palette keeps its highlight by result id. Base UI's Autocomplete keeps an index it resets when the items change, so the listbox is written in `src/ds/`; do not swap it back.

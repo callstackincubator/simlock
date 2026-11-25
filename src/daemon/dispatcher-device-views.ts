@@ -1,3 +1,4 @@
+import { readsEveryLease } from "../contract/index.js";
 import {
   isStalledTransition,
   transitionEnteredAt,
@@ -8,10 +9,10 @@ import {
 import type { DispatchSession } from "./dispatch.js";
 import type { DispatcherOptions } from "./dispatcher-options.js";
 
-// why: an agent token must not learn other principals' leases or requester ids; admin sees all.
+// why: an agent token must not learn other principals' leases or requester ids; viewer and admin see all.
 export function leasesFor(options: DispatcherOptions, session: DispatchSession) {
   return options.registry.snapshot.leases.filter(
-    (lease) => session.role === "admin" || lease.ownerId === session.principal,
+    (lease) => readsEveryLease(session.role) || lease.ownerId === session.principal,
   );
 }
 
@@ -21,7 +22,7 @@ export function waitingFor(options: DispatcherOptions, session: DispatchSession)
     .waitingRequests()
     .filter(
       (request) =>
-        session.role === "admin" ||
+        readsEveryLease(session.role) ||
         options.queue.pendingRequestOwner(request.requesterId, request.spec.platform) ===
           session.principal,
     );

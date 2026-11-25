@@ -24,10 +24,28 @@ ALTER TABLE tokens ADD COLUMN worker_id TEXT;
 CREATE UNIQUE INDEX tokens_worker_id ON tokens (worker_id);
 `;
 
+// why: SQLite enforces CHECK constraints on the table definition, so adding `viewer` rebuilds the
+// table in rowid order (preserving `list()`'s order) and restores the pinned-worker unique index.
+const TOKENS_V3 = `
+CREATE TABLE tokens_v3 (
+  id TEXT PRIMARY KEY,
+  hash TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL CHECK (role IN ('agent', 'viewer', 'operator', 'worker')),
+  label TEXT,
+  created_at INTEGER NOT NULL,
+  worker_id TEXT
+) STRICT;
+INSERT INTO tokens_v3 (id, hash, role, label, created_at, worker_id)
+  SELECT id, hash, role, label, created_at, worker_id FROM tokens ORDER BY rowid;
+DROP TABLE tokens;
+ALTER TABLE tokens_v3 RENAME TO tokens;
+CREATE UNIQUE INDEX tokens_worker_id ON tokens (worker_id);
+`;
+
 export const tokensOwner: SqliteSchemaOwner = {
-  migrations: [TOKENS_V1, TOKENS_V2],
+  migrations: [TOKENS_V1, TOKENS_V2, TOKENS_V3],
   name: "tokens",
-  version: 2,
+  version: 3,
 };
 
 export interface TokenStoreOptions {

@@ -227,7 +227,7 @@ async function fixture(page: Page) {
         !controls.unauthorized &&
         new Headers(init?.headers).has("Authorization")
       )
-        return json({ name: "Synthetic operator", via: "token" });
+        return json({ name: "Synthetic operator", role: "admin", via: "token" });
       if (path === "/v1/identity")
         return json({ error: { code: "UNAUTHORIZED", message: "Synthetic signed out" } }, 401);
       if (controls.unauthorized)

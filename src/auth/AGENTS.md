@@ -32,7 +32,7 @@ Tokens and the uplink:
 
 Socket:
 
-- At `hello`, no credential is `agent`. A credential that is neither an operator token nor the admin secret is `AdminAuthenticationFailedError`, never a quiet `agent`.
+- At `hello`, no credential is `agent`. A `viewer` token resolves to `viewer`, an `operator` token or the admin secret resolves to `admin`, and any other credential is `AdminAuthenticationFailedError`, never a quiet `agent`.
 - The admin secret's hash lives in memory from construction; the plaintext is written to `admin.token` only by `persist`, which the daemon calls after the socket claim.
 
 ## Adding a strategy

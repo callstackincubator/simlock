@@ -82,7 +82,7 @@ const STREAM_HEADERS = {
   "simlock-stream-width": "330",
 };
 
-const OPERATOR = { principal: "tok_op", role: "operator" };
+const OPERATOR = { principal: "tok_op", role: "operator" } as const;
 
 const deviceRequest = (worker: string, device: string) =>
   new Request(`http://daemon/v1/stream/workers/${worker}/devices/${device}`);
@@ -315,7 +315,7 @@ describe("createWorkerStream", () => {
   });
 
   it("answers an agent token asking for a device's stream with 404 UNKNOWN_DEVICE, on a worker and through a gateway, opening and relaying nothing", async () => {
-    const agent = { principal: "tok_agent", role: "agent" };
+    const agent = { principal: "tok_agent", role: "agent" } as const;
     const { opened, stream } = worker();
     expect((await stream.mount.handle(deviceRequest("w1", "dev_1"), OPERATOR)).status).toBe(200);
     const onWorker = await stream.mount.handle(deviceRequest("w1", "dev_1"), agent);
@@ -777,7 +777,7 @@ describe("createWorkerStream", () => {
     {
       const { feeds, opened, stream } = worker();
       const viewer = await openOnRoute(stream, "device");
-      const agent = { principal: "tok_agent", role: "agent" };
+      const agent = { principal: "tok_agent", role: "agent" } as const;
       const refused = [
         await stream.mount.handle(deviceRequest("w1", "dev_leased"), agent),
         await stream.mount.handle(deviceRequest("w1", "dev_nope"), OPERATOR),

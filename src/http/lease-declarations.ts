@@ -302,7 +302,7 @@ export const leaseRequestListRoute = declareRoute({
   path: "/v1/lease-requests",
   tag: "Lease requests",
   summary: "Every request waiting for a device",
-  role: "admin",
+  role: "viewer",
   reply: requestsReplySchema,
 });
 
@@ -345,8 +345,8 @@ export const leaseListRoute = declareRoute({
   method: "get",
   path: "/v1/leases",
   tag: "Leases",
-  summary: "The caller's leases; an operator sees every lease",
-  role: "agent",
+  summary: "The caller's leases; a viewer or operator sees every lease",
+  role: "any",
   reply: OPERATIONS["lease.list"].output,
 });
 
@@ -355,7 +355,7 @@ export const leaseGetRoute = declareRoute({
   path: "/v1/leases/{id}",
   tag: "Leases",
   summary: "Read one lease",
-  role: "agent",
+  role: "any",
   notes: "A lease the caller does not own answers 404, as an unknown one does.",
   request: { params: leaseParamsSchema },
   reply: z.object({ lease: leasePayloadSchema }),

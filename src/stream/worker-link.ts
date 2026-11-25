@@ -1,3 +1,4 @@
+import { readsEveryLease } from "../contract/index.js";
 import {
   type DeviceRecord,
   encodeScreenFrame,
@@ -206,10 +207,10 @@ function requireDevice(
   target: StreamTarget,
   caller: StreamCaller,
 ): DeviceRecord {
-  // why: only an operator watches a device, and an agent gets the answer an unknown device gets, so
+  // why: only an operator or viewer watches a device, and an agent gets the answer an unknown device gets, so
   // it cannot learn which devices exist or which one its lease holds. A lease's stream was checked
   // against its owner by the HTTP layer before it got here.
-  if (target.leaseId === undefined && caller.role !== "operator") {
+  if (target.leaseId === undefined && !readsEveryLease(caller.role)) {
     throw unknownDevice(target.deviceId);
   }
   // why: a worker answers only for its own id (ADR 0012 section 1); a gateway names the worker it relays to,

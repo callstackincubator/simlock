@@ -1,3 +1,4 @@
+import { readsEveryLease } from "../contract/index.js";
 import type { ScreenMeta } from "../core/index.js";
 import { type Broadcast, createBroadcast } from "./broadcast.js";
 import type { StreamCaller } from "./caller.js";
@@ -70,7 +71,7 @@ async function serveDevice(
 ): Promise<CapturedStream> {
   // why: the same refusal an unknown device gets, before any relay, so an agent cannot reach a screen
   // by naming a device. A lease's stream was checked against its owner by the HTTP layer.
-  if (target.leaseId === undefined && caller.role !== "operator") {
+  if (target.leaseId === undefined && !readsEveryLease(caller.role)) {
     throw unknownDevice(target.deviceId);
   }
   const workerId = target.workerId ?? "";

@@ -1,8 +1,15 @@
 import { signInHref } from "../model/sign-in-url";
 import { type Fetch, hasSimlockErrorCode, RequestTimeoutError, send } from "./api";
 
+export type SessionRole = "admin" | "viewer";
+
 export type IdentityOutcome =
-  | { readonly kind: "proxy"; readonly name: string; readonly signOutUrl?: string }
+  | {
+      readonly kind: "proxy";
+      readonly name: string;
+      readonly role?: SessionRole;
+      readonly signOutUrl?: string;
+    }
   | { readonly kind: "refused"; readonly reason: string; readonly signInUrl?: string }
   | { readonly kind: "none"; readonly signInUrl?: string }
   | { readonly kind: "ended"; readonly signInUrl?: string }
@@ -64,13 +71,21 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+export function parseSessionRole(value: unknown): SessionRole | undefined {
+  return value === "admin" || value === "viewer" ? value : undefined;
+}
+
 function proxyIdentity(body: unknown): IdentityOutcome | undefined {
   if (typeof body !== "object" || body === null) return undefined;
-  const { name, signOutUrl, via } = body as Record<string, unknown>;
+  const { name, role, signOutUrl, via } = body as Record<string, unknown>;
   if (via !== "proxy" || typeof name !== "string") return undefined;
-  return typeof signOutUrl === "string"
-    ? { kind: "proxy", name, signOutUrl }
-    : { kind: "proxy", name };
+  const parsedRole = parseSessionRole(role);
+  return {
+    kind: "proxy",
+    name,
+    ...(parsedRole === undefined ? {} : { role: parsedRole }),
+    ...(typeof signOutUrl === "string" ? { signOutUrl } : {}),
+  };
 }
 
 async function askHealthz(fetch: Fetch): Promise<IdentityOutcome> {

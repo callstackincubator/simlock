@@ -11,7 +11,7 @@ A worker's console shows that worker. A gateway's shows every worker that joined
 
 ## Actions
 
-The console mostly shows. These are the changes it makes; each asks to confirm when it is destructive.
+The console mostly shows. With an operator token (or proxy sign-in), it also offers these changes; each asks to confirm when it is destructive. With a `viewer` token, the sidebar shows **Read-only** and all mutating actions are hidden.
 
 | Action | Where | Does |
 | --- | --- | --- |
@@ -193,7 +193,7 @@ The figures for a range, as `simlock stats` gives them: requests, grants, reject
 ## Settings
 
 - **Console**: your preferences in this browser: theme (**System**, **Light** or **Dark**), sidebar (**Expanded** or **Collapsed**; a phone's menu ignores it), the default range for **Overview** and **Activity**, rows per page, and holder ids **Short** (cut in the middle) or **Full**. A change applies at once and stays in this browser.
-- **Daemon**: the daemon's live configuration by section, secrets masked. Read-only: **Copy** next to a key copies its `simlock config set <key> <value>` command. It needs an admin token; with another, the card says your token can't read this daemon's settings, and an older daemon that can't report them is said so. On a gateway it shows the gateway's own configuration.
+- **Daemon**: the daemon's live configuration by section, secrets masked. Read-only: **Copy** next to a key copies its `simlock config set <key> <value>` command. It needs an operator or viewer token; with another, the card says your token can't read this daemon's settings, and an older daemon that can't report them is said so. On a gateway it shows the gateway's own configuration.
 
 ## On a gateway
 

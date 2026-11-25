@@ -1,4 +1,4 @@
-import { requestedDevice } from "../contract/index.js";
+import { readsEveryLease, requestedDevice } from "../contract/index.js";
 import {
   effectiveAllowDownload,
   RuntimeMissingError,
@@ -139,7 +139,10 @@ export class LeaseHandlers {
     const lease = this.options.registry.snapshot.leases.find(
       (candidate) => candidate.id === input.leaseId,
     );
-    if (lease === undefined || (session.role !== "admin" && lease.ownerId !== session.principal)) {
+    if (
+      lease === undefined ||
+      (!readsEveryLease(session.role) && lease.ownerId !== session.principal)
+    ) {
       throw new UnknownLeaseError(input.leaseId);
     }
     return { lease };

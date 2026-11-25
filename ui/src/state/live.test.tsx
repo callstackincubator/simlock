@@ -47,7 +47,11 @@ describe("the live provider", () => {
       fetch: () => Promise.reject(new Error("unused")),
       notify: () => undefined,
       preferences: {} as never,
-      session: { lost: () => undefined } as never,
+      session: {
+        lost: () => undefined,
+        state: () => ({ kind: "none" }),
+        subscribe: () => () => undefined,
+      } as never,
     };
     const node: ReactNode = (
       <ConsoleProvider {...services}>

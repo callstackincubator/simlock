@@ -3,44 +3,49 @@ import {
   OPERATIONS,
   type Effect,
   type OperationName,
+  type OperationRole,
   requestedDevice,
+  ROLES,
+  roleAllows,
   type Role,
 } from "./index.js";
 
 const ROLE_MATRIX: ReadonlyArray<{
   readonly name: OperationName;
   readonly input: unknown;
-  readonly role: Role;
+  readonly role: OperationRole;
 }> = [
-  { name: "catalog.get", input: {}, role: "agent" },
-  { name: "status.get", input: {}, role: "agent" },
+  { name: "catalog.get", input: {}, role: "any" },
+  { name: "status.get", input: {}, role: "any" },
   { name: "lease.request", input: { model: "iPhone 17", platform: "ios" }, role: "agent" },
   { name: "lease.cancel", input: {}, role: "agent" },
   { name: "lease.renew", input: { leaseId: "lease_1" }, role: "agent" },
   { name: "lease.release", input: { leaseId: "lease_1" }, role: "agent" },
-  { name: "lease.list", input: {}, role: "agent" },
-  { name: "lease.get", input: { leaseId: "lse_1" }, role: "agent" },
+  { name: "lease.list", input: {}, role: "any" },
+  { name: "lease.get", input: { leaseId: "lse_1" }, role: "any" },
   { name: "doctor.run", input: { fix: false }, role: "agent" },
   { name: "doctor.run", input: {}, role: "agent" },
   { name: "doctor.run", input: { fix: true }, role: "admin" },
   { name: "doctor.run", input: { purgeOrphans: true }, role: "admin" },
   { name: "lease.release-all", input: {}, role: "admin" },
   { name: "lease.release-run", input: { runId: "nightly-7" }, role: "agent" },
-  { name: "list.get", input: {}, role: "admin" },
+  { name: "list.get", input: {}, role: "viewer" },
   { name: "cleanup.run", input: {}, role: "admin" },
   { name: "nuke.run", input: {}, role: "admin" },
   { name: "warm.forget", input: { model: "Pixel", platform: "android" }, role: "admin" },
   { name: "baseline.save", input: { leaseId: "L1", name: "checkout" }, role: "admin" },
-  { name: "baseline.list", input: {}, role: "agent" },
+  { name: "baseline.list", input: {}, role: "any" },
   { name: "baseline.remove", input: { name: "checkout" }, role: "admin" },
-  { name: "config.get", input: {}, role: "admin" },
+  { name: "config.get", input: {}, role: "viewer" },
+  { name: "config.get", input: { showSecrets: false }, role: "viewer" },
+  { name: "config.get", input: { showSecrets: true }, role: "admin" },
   { name: "daemon.stop", input: {}, role: "admin" },
   { name: "daemon.update", input: {}, role: "admin" },
-  { name: "events.replay", input: {}, role: "admin" },
-  { name: "events.subscribe", input: {}, role: "admin" },
-  { name: "events.unsubscribe", input: {}, role: "admin" },
-  { name: "usage.get", input: { from: 0, to: 60_000 }, role: "admin" },
-  { name: "inbox.get", input: {}, role: "admin" },
+  { name: "events.replay", input: {}, role: "viewer" },
+  { name: "events.subscribe", input: {}, role: "viewer" },
+  { name: "events.unsubscribe", input: {}, role: "viewer" },
+  { name: "usage.get", input: { from: 0, to: 60_000 }, role: "viewer" },
+  { name: "inbox.get", input: {}, role: "viewer" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
   {
@@ -53,16 +58,16 @@ const ROLE_MATRIX: ReadonlyArray<{
     input: { leaseId: "lease_1", orientation: "landscape_left" },
     role: "agent",
   },
-  { name: "identity.get", input: {}, role: "agent" },
-  { name: "token.list", input: {}, role: "admin" },
+  { name: "identity.get", input: {}, role: "any" },
+  { name: "token.list", input: {}, role: "viewer" },
   { name: "token.revoke", input: { id: "tok_1" }, role: "admin" },
-  { name: "worker.list", input: {}, role: "admin" },
+  { name: "worker.list", input: {}, role: "viewer" },
   { name: "worker.drain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.update", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
-  { name: "component.list", input: {}, role: "agent" },
+  { name: "component.list", input: {}, role: "any" },
   {
     name: "worker.install-component",
     input: { platform: "ios", version: "26.4", workers: "all" },
@@ -88,6 +93,13 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "alerts.test", input: { destination: "ops" }, role: "admin" },
 ];
 
+const ALLOWED_BY_REQUIRED: Readonly<Record<OperationRole, readonly Role[]>> = {
+  admin: ["admin"],
+  agent: ["agent", "admin"],
+  any: ["agent", "viewer", "admin"],
+  viewer: ["viewer", "admin"],
+};
+
 describe("operation role matrix", () => {
   it("declares every operation the ADR's §3 matrix names", () => {
     const declaredNames = new Set(Object.keys(OPERATIONS));
@@ -97,9 +109,12 @@ describe("operation role matrix", () => {
 
   it.each(ROLE_MATRIX)("$name with $input resolves to role $role", ({ name, input, role }) => {
     const operation = OPERATIONS[name];
-    const roleFn = operation.role as Role | ((input: unknown) => Role);
+    const roleFn = operation.role as OperationRole | ((input: unknown) => OperationRole);
     const resolved = typeof roleFn === "function" ? roleFn(input) : roleFn;
     expect(resolved).toBe(role);
+    expect(ROLES.filter((session) => roleAllows(session, resolved))).toEqual(
+      ALLOWED_BY_REQUIRED[role],
+    );
   });
 });
 

@@ -321,6 +321,55 @@ describe("the console acts", () => {
     expect(screen.queryByRole("button", { name: WORKER_ACTION })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
   });
+
+  it("a read-only viewer sees Read-only in the sidebar and no mutating actions on Leases, Queue, Fleet, Inbox or Search", async () => {
+    const { routes } = leaseRoutes(["agent-a"]);
+    const waiting = request({ id: "req_1", requesterId: "agent-b", spec: waiterSpec() });
+    const drained = workerItem(
+      "drained",
+      "Needs a look",
+      worker({ drained: true, id: "wrk_1", label: "mac-studio-01" }),
+    );
+    const view = renderConsole({
+      mode: "gateway",
+      path: "/leases",
+      role: "viewer",
+      routes: {
+        ...routes,
+        "/v1/inbox": { body: { items: [drained] } },
+        "/v1/lease-requests": { body: { requests: [waiting] } },
+        "/v1/workers": {
+          body: { workers: [worker({ drained: true, id: "wrk_1", label: "mac-studio-01" })] },
+        },
+      },
+    });
+    expect(await screen.findByText("Read-only")).toBeVisible();
+
+    await view.user.click(await screen.findByRole("link", { name: "agent-a" }));
+    const pane = await screen.findByRole("region", { name: "Lease" });
+    expect(await within(pane).findByRole("button", { name: "Copy id" })).toBeVisible();
+    expect(within(pane).queryByRole("button", { name: "Release" })).not.toBeInTheDocument();
+
+    await view.user.click(screen.getByRole("link", { name: /^Queue/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Queue" })).toBeVisible();
+    expect(await screen.findByText("agent-b")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
+
+    await view.user.click(screen.getByRole("link", { name: /^Fleet/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Fleet" })).toBeVisible();
+    expect(await screen.findByRole("link", { name: /mac-studio-01/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: WORKER_ACTION })).not.toBeInTheDocument();
+
+    await view.user.click(screen.getByRole("link", { name: /^Inbox/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: WORKER_ACTION })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
+
+    await view.user.keyboard("{Control>}k{/Control}");
+    const search = await screen.findByRole("combobox");
+    await view.user.type(search, "undrain");
+    expect(screen.queryByText(/Undrain —/)).not.toBeInTheDocument();
+  });
 });
 
 function waiterSpec() {

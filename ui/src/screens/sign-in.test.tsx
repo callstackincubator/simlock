@@ -30,7 +30,7 @@ describe("the sign-in screen", () => {
     );
 
     expect(html).toContain('<h1 id="');
-    expect(html).toMatch(/<label for="token">Operator token<\/label>/);
+    expect(html).toMatch(/<label for="token">Operator or viewer token<\/label>/);
     expect(html).toContain('aria-describedby="token-hint"');
     expect(html).toContain("simlock token create --role operator");
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*>Sign in<\/button>/);

@@ -50,6 +50,7 @@ export interface ConsoleOptions {
   readonly routes?: Routes;
   // why: the token the browser already holds; `null` is a visitor who must sign in.
   readonly token?: string | null;
+  readonly role?: "admin" | "viewer";
   readonly mode?: "gateway" | "worker";
   readonly daemon?: Readonly<Record<string, unknown>>;
   // why: a test that lets minutes pass (a poll, an idle window) fakes the timers too; every other
@@ -129,7 +130,7 @@ export function renderConsole(options: ConsoleOptions = {}) {
     "/v1/identity":
       options.token === null
         ? { body: { error: { code: "UNAUTHENTICATED", message: "Sign in" } }, status: 401 }
-        : { body: { name: "operator" } },
+        : { body: { name: "operator", role: options.role ?? "admin" } },
     "/v1/status": {
       body: { daemon: { mode: options.mode ?? "gateway", version: "0.6.0", ...options.daemon } },
     },

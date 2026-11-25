@@ -1,10 +1,10 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 
-import { describeSchemaIssues } from "../contract/index.js";
+import { describeSchemaIssues, type OperationRole } from "../contract/index.js";
 import { badRequest, errorResponse } from "./errors.js";
 
-export type RouteRole = "public" | "agent" | "admin";
+export type RouteRole = "public" | OperationRole;
 type RouteTag =
   | "System"
   | "Devices"
@@ -204,6 +204,14 @@ export function sseMessage(events: Readonly<Record<string, z.ZodType>>) {
   });
 }
 
+const ROLE_LABEL: Readonly<Record<RouteRole, string>> = {
+  admin: "admin",
+  agent: "agent",
+  any: "any (agent, viewer or admin)",
+  public: "none, no token needed",
+  viewer: "viewer or admin",
+};
+
 export function declareRoute<
   const Path extends string,
   const Role extends RouteRole,
@@ -243,7 +251,7 @@ export function declareRoute<
     path: declaration.path,
     tags: [declaration.tag],
     summary: declaration.summary,
-    description: `Role: ${declaration.role === "public" ? "none, no token needed" : declaration.role}.${declaration.notes === undefined ? "" : ` ${declaration.notes}`}`,
+    description: `Role: ${ROLE_LABEL[declaration.role]}.${declaration.notes === undefined ? "" : ` ${declaration.notes}`}`,
     security: declaration.role === "public" ? [] : [{ [BEARER_SCHEME]: [] }],
     request: {
       ...(request.query === undefined ? {} : { query: request.query }),

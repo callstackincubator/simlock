@@ -102,7 +102,9 @@ export function createAuthFrom(
     },
     resolveHelloRole: async (hello) => {
       if (hello.credential === undefined) return "agent";
-      if ((await store.verify(hello.credential))?.role === "operator") return "admin";
+      const record = await store.verify(hello.credential);
+      if (record?.role === "operator") return "admin";
+      if (record?.role === "viewer") return "viewer";
       if (adminSecret.verify(hello.credential)) return "admin";
       throw new AdminAuthenticationFailedError();
     },

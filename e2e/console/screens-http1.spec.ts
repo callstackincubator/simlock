@@ -102,7 +102,7 @@ test("keeps HTTP/1 reads moving while four watched screens capture, and closes t
       return;
     }
     const answers: Record<string, unknown> = {
-      "/v1/identity": { name: "Synthetic operator", via: "token" },
+      "/v1/identity": { name: "Synthetic operator", role: "admin", via: "token" },
       "/v1/healthz": { ok: true },
       "/v1/status": { daemon: { mode: "worker", version: "0.5.0" } },
       "/v1/inbox": { items: [], now: Date.now() },

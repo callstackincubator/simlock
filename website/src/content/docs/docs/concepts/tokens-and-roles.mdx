@@ -14,7 +14,8 @@ Everything that reaches a worker or gateway over the network (an agent, a person
 | Role | Made for | May |
 | --- | --- | --- |
 | `agent` | A coding agent or CI job that leases devices. | Read the catalog, list installed runtimes, and see its own leases and waiting requests. Request, renew and release its own leases, cancel its own waiting requests, run commands on its leased devices, watch their screens and send them input. |
-| `operator` | A person, or a script that manages the fleet. | Everything an agent may, for every requester's leases, plus the console, events, usage figures, tokens, worker commands and runtime installs. |
+| `viewer` | A person watching the console read-only, or a monitoring script reading fleet state. | Read the whole fleet: status, workers, devices, every lease, waiting requests, Inbox, events, usage figures, token labels, redacted configuration, catalog, baselines, components and live device screens. May not lease, run commands, access lease files, send input, open tunnels, read unredacted secrets, or change any worker, lease, baseline, component or token. |
+| `operator` | A person, or a script that manages the fleet. | Everything an agent or viewer may, for every requester's leases, plus releasing leases, cancelling requests, draining/updating/removing workers, managing baselines, components, devices and tokens, and reading unredacted configuration. |
 | `worker` | A worker machine joining a gateway. | Connect one worker to the gateway, and nothing else. |
 
 A session with an operator token has the **admin** role, the role every page means when it says a command "needs the admin role". The CLI on the daemon's own machine is admin with no token: as the user who runs the daemon, it reads a credential the daemon writes into its data folder each time it starts. Any other user passes an operator token's secret. A CLI with no admin credential connects as an agent, and admin commands fail with `FORBIDDEN`.

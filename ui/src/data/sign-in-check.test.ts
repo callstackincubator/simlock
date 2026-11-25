@@ -39,7 +39,7 @@ describe("checkToken", () => {
 
     expect(outcome).toEqual({ kind: "not-operator" });
     expect(refusalMessage({ kind: "not-operator" })).toBe(
-      "That token is real, but the console needs an operator token.",
+      "That token is real, but the console needs an operator or viewer token.",
     );
   });
 

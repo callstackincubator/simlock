@@ -25,7 +25,7 @@ export function SignInScreen() {
           </p>
         )}
         <form className="sign-in-form" onSubmit={onSubmit} noValidate>
-          <label htmlFor="token">Operator token</label>
+          <label htmlFor="token">Operator or viewer token</label>
           <input
             id="token"
             name="token"
@@ -38,7 +38,8 @@ export function SignInScreen() {
             aria-invalid={refused || undefined}
           />
           <p id="token-hint" className="hint">
-            Create one with <code>simlock token create --role operator</code>.
+            Create one with <code>simlock token create --role operator</code> or{" "}
+            <code>--role viewer</code>.
           </p>
           {refusal === undefined ? null : (
             <p id="token-refusal" className="refusal" role="alert">

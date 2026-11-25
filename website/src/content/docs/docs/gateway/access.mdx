@@ -21,7 +21,8 @@ The examples use the gateway. Tokens work the same on a standalone worker: drop 
 | Role | Give it to |
 | --- | --- |
 | `agent` | Each coding agent or CI job that leases devices over HTTP. One token per agent: all leases made with one token count as one requester. |
-| `operator` | Each person who uses the console, or a script that manages the fleet. |
+| `viewer` | Each person who watches the console read-only, or a dashboard/monitoring script that reads fleet status, events, usage and screens without mutating anything. |
+| `operator` | Each person who manages the fleet in the console, or a script that mutates workers, leases, baselines, components or tokens. |
 | `worker` | Each worker machine that joins the gateway. See [Add a worker](/simlock/docs/gateway/add-a-worker). |
 
 <Aside type="caution">
@@ -38,7 +39,7 @@ simlock --gateway token create --role agent --label ci-ios-runner-3
 {"secret":"slk_Xr8vB2nQ5kLw0pT7yHc4mZs9dFj1gUe6aKo3iVb-Rq0","token":{"id":"tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45","role":"agent","label":"ci-ios-runner-3","createdAt":1792569600000}}
 ```
 
-- `--role` is `agent`, `operator` or `worker`.
+- `--role` is `agent`, `viewer`, `operator` or `worker`.
 - `--label` is optional, and shows wherever the token's leases are listed, the console's **Held by** included. Give each one a name you will recognise.
 - The `secret` is printed once and can't be shown again. If you lose it, make a new token and revoke the old one.
 

@@ -1,11 +1,11 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect } from "react";
 
 import type { ConnectionPhase } from "../data/live/connection";
 import { problemCount } from "../../../src/contract/inbox";
 import type { InboxList } from "../model/inbox";
 import { formatDuration } from "../model/time";
 import type { Toned } from "../model/tones";
-import { useConnection, useNow, useRouteQuery } from "./live";
+import { useConnection, useNow, useRouteQuery, useSignedInIdentity } from "./live";
 import { useApi, useSession } from "./services";
 
 export function useInboxCount(): number | undefined {
@@ -24,32 +24,14 @@ export function useTokenCheck(): void {
 
 export interface SignedIn {
   readonly name: string | undefined;
+  readonly readOnly: boolean;
   // why: a proxy person with no sign-out address has nowhere to go, so there is no Sign out.
   readonly canSignOut: boolean;
 }
 
 export function useSignedIn(): SignedIn {
-  const api = useApi();
-  const session = useSession();
-  const state = useSyncExternalStore(session.subscribe, session.state, session.state);
-  const token = state.kind === "token" ? state.token : undefined;
-  const [tokenName, setTokenName] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    if (token === undefined) return;
-    let current = true;
-    api.getJson<{ readonly name: string }>("/v1/identity").then(
-      (identity) => current && setTokenName(identity.name),
-      () => undefined,
-    );
-    return () => {
-      current = false;
-      setTokenName(undefined);
-    };
-  }, [api, token]);
-  if (state.kind === "proxy") {
-    return { canSignOut: state.signOutUrl !== undefined, name: state.name };
-  }
-  return { canSignOut: true, name: tokenName };
+  const { canSignOut, name, role } = useSignedInIdentity();
+  return { canSignOut, name, readOnly: role === "viewer" };
 }
 
 export function useSignOut(): () => void {

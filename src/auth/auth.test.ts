@@ -371,4 +371,20 @@ describe("authenticateUplink", () => {
       tokenId: record.id,
     });
   });
+
+  it("identifies a viewer token on HTTP with role viewer and resolves it to viewer at hello", async () => {
+    const auth = createAuth(await options());
+    const { record, secret } = await auth.tokens.create("viewer", "observer");
+
+    await expect(
+      auth.authenticateRequest(new Headers({ authorization: `Bearer ${secret}` })),
+    ).resolves.toEqual({
+      ambient: false,
+      name: "observer",
+      principal: record.id,
+      role: "viewer",
+      via: "token",
+    });
+    await expect(auth.resolveHelloRole({ credential: secret })).resolves.toBe("viewer");
+  });
 });

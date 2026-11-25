@@ -2,6 +2,7 @@ import { buildCapacityFigures, redactConfig } from "../core/index.js";
 import {
   consoleUrlField,
   fitPlatformCatalog,
+  readsEveryLease,
   withoutQuarantineMessages,
 } from "../contract/index.js";
 import { readCapabilities } from "./dispatcher-capabilities.js";
@@ -71,7 +72,7 @@ export class StatusHandlers {
       waiting: waitingFor(this.options, session),
       warmPool: this.options.warmPool.figures(),
     };
-    return session.role === "agent" ? withoutQuarantineMessages(answer) : answer;
+    return readsEveryLease(session.role) ? answer : withoutQuarantineMessages(answer);
   };
 
   #updateFields(): UpdateProgress {

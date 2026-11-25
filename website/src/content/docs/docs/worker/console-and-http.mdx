@@ -57,7 +57,7 @@ By default HTTP listens on `127.0.0.1`, so only this machine can reach it. With 
 
    The secret prints only once, so keep it somewhere safe. A token works only on the daemon that made it.
 
-3. Open the address in a browser, paste the `secret` into **Operator token** and press **Sign in**.
+3. Open the address in a browser, paste the `secret` into **Operator or viewer token** and press **Sign in**. For read-only console access, create a token with `--role viewer` instead.
 
 </Steps>
 
@@ -149,7 +149,7 @@ The console says why it does not accept a token:
 | What you see | Cause | Fix |
 | --- | --- | --- |
 | This daemon does not know that token. | The token is mistyped, revoked, or from another daemon. | Make a new one on this daemon. |
-| That token is real, but the console needs an operator token. | It is an agent or worker token. | Make one with `--role operator`. |
+| That token is real, but the console needs an operator or viewer token. | It is an agent or worker token. | Make one with `--role operator` (or `--role viewer` for read-only). |
 | The daemon is starting. Try again in a moment. | The daemon answers but has not finished starting. | Wait, then sign in again. |
 | The daemon cannot be reached. | Nothing answers at this address. | Check `simlock daemon status` and the address. |
 | The daemon answered with an error (HTTP 500). | Anything else. | Read `simlock daemon logs`. |

@@ -19,7 +19,7 @@ export const sessionRoute = declareRoute({
   path: "/v1/session",
   tag: "System",
   summary: "Open a daemon protocol session over a WebSocket",
-  role: "agent",
+  role: "any",
   notes:
     "Each text message is one line of the daemon's socket protocol. The token sets the session's role and principal. A plain GET without an upgrade answers 426.",
   status: 204,
@@ -30,7 +30,7 @@ export const statusRoute = declareRoute({
   path: "/v1/status",
   tag: "System",
   summary: "The daemon's devices, leases and capacity",
-  role: "agent",
+  role: "any",
   notes: "With an agent token, leases and waiting hold only that token's own.",
   reply: OPERATIONS["status.get"].output,
 });
@@ -57,7 +57,7 @@ export const catalogRoute = declareRoute({
   path: "/v1/catalog",
   tag: "System",
   summary: "The platforms, runtimes and models a lease can ask for",
-  role: "agent",
+  role: "any",
   request: { query: platformQuerySchema },
   reply: OPERATIONS["catalog.get"].output,
 });
@@ -80,7 +80,7 @@ export const statsRoute = declareRoute({
   path: "/v1/stats",
   tag: "System",
   summary: "Usage over a window of time",
-  role: "admin",
+  role: "viewer",
   request: { query: statsQuerySchema },
   reply: OPERATIONS["usage.get"].output,
   errors: { 422: ["HISTORY_NOT_KEPT"], 503: ["HISTORY_UNAVAILABLE"] },
@@ -91,7 +91,7 @@ export const identityRoute = declareRoute({
   path: "/v1/identity",
   tag: "System",
   summary: "Who the token in the request is",
-  role: "agent",
+  role: "any",
   reply: OPERATIONS["identity.get"].output,
   errorExtras: { 401: { fields: { signInUrl: z.string().optional() } } },
 });
@@ -120,7 +120,7 @@ export const devicesRoute = declareRoute({
   path: "/v1/devices",
   tag: "Devices",
   summary: "The devices this daemon holds",
-  role: "admin",
+  role: "viewer",
   reply: devicesReplySchema,
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { type CatalogReader } from "../core/index.js";
 import {
   OPERATIONS,
+  type OperationName,
   statusDeviceSchema,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
@@ -887,5 +888,62 @@ describe("Dispatcher: error codes", () => {
         session(),
       ),
     ).rejects.toMatchObject({ name: "RuntimeMissingError" });
+  });
+});
+
+describe("Dispatcher: viewer role", () => {
+  it("reads fleet-wide state and redacted config, and refuses secrets, held-lease lookups and every write", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const granted = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", platform: "ios" },
+      session({ principal: "agent-a", role: "agent" }),
+    );
+    const viewer = session({ principal: "tok_viewer", role: "viewer" });
+
+    await expect(dispatcher.dispatch("identity.get", {}, viewer)).resolves.toMatchObject({
+      principal: "tok_viewer",
+      role: "viewer",
+    });
+    await expect(dispatcher.dispatch("lease.list", {}, viewer)).resolves.toMatchObject({
+      leases: [expect.objectContaining({ id: granted.lease.id })],
+    });
+    await expect(
+      dispatcher.dispatch("lease.get", { leaseId: granted.lease.id }, viewer),
+    ).resolves.toMatchObject({ lease: expect.objectContaining({ id: granted.lease.id }) });
+    await expect(dispatcher.dispatch("status.get", {}, viewer)).resolves.toMatchObject({
+      leases: [expect.objectContaining({ id: granted.lease.id })],
+    });
+    await expect(dispatcher.dispatch("worker.list", {}, viewer)).resolves.toMatchObject({
+      workers: [expect.objectContaining({ connection: "connected" })],
+    });
+    await expect(dispatcher.dispatch("list.get", { kind: "devices" }, viewer)).resolves.toEqual(
+      expect.any(Array),
+    );
+    await expect(dispatcher.dispatch("config.get", {}, viewer)).resolves.toBeDefined();
+    await expect(dispatcher.dispatch("token.list", {}, viewer)).resolves.toEqual({ tokens: [] });
+
+    const refused: ReadonlyArray<readonly [OperationName, unknown]> = [
+      ["config.get", { showSecrets: true }],
+      ["lease.request", { model: "iPhone 17 Pro", platform: "ios" }],
+      ["lease.cancel", {}],
+      ["lease.renew", { leaseId: granted.lease.id }],
+      ["lease.release", { leaseId: granted.lease.id }],
+      ["lease.release-run", { runId: "nightly-1" }],
+      ["lease.release-all", {}],
+      ["device.exec", { args: ["list"], leaseId: granted.lease.id, tool: "simctl" }],
+      ["device.rotate", { leaseId: granted.lease.id, orientation: "portrait" }],
+      ["driver.passthrough", { args: ["list"], tool: "simctl" }],
+      ["doctor.run", {}],
+      ["cleanup.run", { dryRun: true }],
+      ["nuke.run", {}],
+      ["token.create", { role: "agent" }],
+      ["token.revoke", { id: "tok_1" }],
+    ];
+    for (const [operation, input] of refused) {
+      await expect(dispatcher.dispatch(operation, input, viewer), operation).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    }
   });
 });

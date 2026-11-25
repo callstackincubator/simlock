@@ -1,10 +1,19 @@
 /**
- * The two daemon session roles (ADR 0003 §3). Enforcement -- rejecting a session whose role is
- * below an operation's -- is the dispatcher's job (§2), which is PR 2. This module only
- * declares the vocabulary the rest of the contract is typed against.
+ * why: The three daemon session roles form a lattice, not a chain: `agent` mutates its own leases,
+ * `viewer` reads the whole fleet without changing it, and `admin` satisfies both. `roleAllows` and
+ * `readsEveryLease` live here so both dispatchers share one rule.
  */
-const ROLES = ["agent", "admin"] as const;
+export const ROLES = ["agent", "viewer", "admin"] as const;
 export type Role = (typeof ROLES)[number];
+export type OperationRole = Role | "any";
+
+export function roleAllows(session: Role, required: OperationRole): boolean {
+  return session === "admin" || required === "any" || session === required;
+}
+
+export function readsEveryLease(role: Role): boolean {
+  return role === "admin" || role === "viewer";
+}
 
 /**
  * Shape an `authorize` hook is given, per operation call (ADR §1's `ownsLease` example, §4's

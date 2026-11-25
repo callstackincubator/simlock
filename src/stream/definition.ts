@@ -40,7 +40,7 @@ export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
         method: "get",
         path: "/v1/stream/workers/{workerId}/devices/{deviceId}",
         description:
-          "Watch the screen of a running device, leased or not: operator tokens only. A single worker answers for its own id; a gateway relays to the named worker. Served only when capabilities.stream.enabled is true. A gateway keeps a worker's refusal with its code.",
+          "Watch the screen of a running device, leased or not: operator or viewer tokens only. A single worker answers for its own id; a gateway relays to the named worker. Served only when capabilities.stream.enabled is true. A gateway keeps a worker's refusal with its code.",
         statuses: {
           200: {
             description: "The picture, as a binary body of frames; its codec and size are headers.",
@@ -79,7 +79,7 @@ export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
         method: "get",
         path: "/v1/leases/{id}/stream",
         description:
-          "Watch the screen of a lease's device: the lease's holder or an operator. A lease the caller does not own answers 404, as an unknown one does. The last frame of a stream a lease end stopped is a 0x07 frame holding JSON {\"reason\"}: explicit, killed, expired or device-lost. Served only when capabilities.stream.enabled is true on the daemon that answers; through a gateway the lease's worker needs it too.",
+          "Watch the screen of a lease's device: the lease's holder, a viewer, or an operator. A lease the caller does not own answers 404, as an unknown one does. The last frame of a stream a lease end stopped is a 0x07 frame holding JSON {\"reason\"}: explicit, killed, expired or device-lost. Served only when capabilities.stream.enabled is true on the daemon that answers; through a gateway the lease's worker needs it too.",
         statuses: {
           200: {
             description: "The picture, as a binary body of frames; its codec and size are headers.",
@@ -119,4 +119,5 @@ export const streamModule: OptionalModuleDefinition<StreamModuleConfig> = {
   loadGateway: () => import("./gateway.js"),
   loadWorker: () => import("./worker.js"),
   name: "stream",
+  viewerLeaseRoute: true,
 };

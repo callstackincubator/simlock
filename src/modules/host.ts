@@ -97,6 +97,7 @@ const HOOK_DEADLINE_MS = 30_000;
 
 interface Started {
   readonly name: string;
+  readonly viewerLeaseRoute: boolean;
   readonly worker: WorkerModule;
 }
 
@@ -288,11 +289,19 @@ async function createGatewaySide(
 
 async function createGatewayHost(options: GatewayHostOptions): Promise<GatewayModuleHost> {
   checkNames(options.definitions);
-  const started: { readonly name: string; readonly gateway: GatewayModule }[] = [];
+  const started: {
+    readonly name: string;
+    readonly viewerLeaseRoute: boolean;
+    readonly gateway: GatewayModule;
+  }[] = [];
   for (const definition of options.definitions) {
     if (options.config.capabilities[definition.name]?.enabled !== true) continue;
     if (definition.loadGateway === undefined) continue;
-    started.push({ gateway: await createGatewaySide(definition, options), name: definition.name });
+    started.push({
+      gateway: await createGatewaySide(definition, options),
+      name: definition.name,
+      viewerLeaseRoute: definition.viewerLeaseRoute === true,
+    });
   }
   return {
     beforeDrain: () =>
@@ -310,7 +319,7 @@ async function createGatewayHost(options: GatewayHostOptions): Promise<GatewayMo
         gateway.mount === undefined ? [] : [{ handle: gateway.mount(deps), prefix: name }],
       ),
     leaseRoutes: () =>
-      started.flatMap(({ gateway, name }) =>
+      started.flatMap(({ gateway, name, viewerLeaseRoute }) =>
         gateway.leaseRoute === undefined
           ? []
           : [
@@ -318,6 +327,7 @@ async function createGatewayHost(options: GatewayHostOptions): Promise<GatewayMo
                 handle: gateway.leaseRoute,
                 name,
                 ...(gateway.socket === undefined ? {} : { socket: gateway.socket }),
+                ...(viewerLeaseRoute ? { viewerLeaseRoute: true } : {}),
               },
             ],
       ),
@@ -348,7 +358,11 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
       continue;
     }
     const worker = await createOne(definition, options);
-    started.push({ name: definition.name, worker });
+    started.push({
+      name: definition.name,
+      viewerLeaseRoute: definition.viewerLeaseRoute === true,
+      worker,
+    });
     capabilitySources.push(worker.capability);
   }
 
@@ -433,7 +447,7 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
       );
     },
     leaseRoutes: () =>
-      started.flatMap(({ name, worker }) =>
+      started.flatMap(({ name, viewerLeaseRoute, worker }) =>
         worker.leaseRoute === undefined
           ? []
           : [
@@ -441,6 +455,7 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
                 handle: worker.leaseRoute,
                 name,
                 ...(worker.socket === undefined ? {} : { socket: worker.socket }),
+                ...(viewerLeaseRoute ? { viewerLeaseRoute: true } : {}),
               },
             ],
       ),

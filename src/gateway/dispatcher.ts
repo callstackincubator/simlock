@@ -44,6 +44,7 @@ import {
   isSimlockError,
   EVENTS_PAGE_DEFAULT,
   OPERATIONS,
+  readsEveryLease,
   requestedDevice,
   type OperationName,
   withoutQuarantineMessages,
@@ -369,7 +370,7 @@ export class GatewayDispatcher {
       leaseIndex: this.options.leaseIndex,
     });
     const answer = { ...status, daemon: { ...status.daemon, ...consoleUrl }, history };
-    if (session.role === "admin") return answer;
+    if (readsEveryLease(session.role)) return answer;
     const { principal } = session;
     return withoutQuarantineMessages({
       ...answer,
@@ -570,8 +571,9 @@ export class GatewayDispatcher {
    * which is what `GET /v1/leases` is for.
    */
   #leaseList: Handler<"lease.list"> = (_input, session) => ({
-    leases:
-      session.role === "admin" ? this.#fleetLeases() : this.#ownedFleetLeases(session.principal),
+    leases: readsEveryLease(session.role)
+      ? this.#fleetLeases()
+      : this.#ownedFleetLeases(session.principal),
   });
 
   // why: the one place a gateway lease record gets `workerLeaseId` (the worker's own id), so `lease.list`, `lease.get` and `list.get kind=leases` agree and `status.get` (which calls `project` directly) does not carry it.
@@ -585,16 +587,16 @@ export class GatewayDispatcher {
     };
   }
 
-  // why: finds the record `lease.list` would hold for this session without building the list -- a gateway-issued lease through the index (its owner, or an admin), a worker's own local lease for an admin only, by a raw id the index does not rename.
+  // why: finds the record `lease.list` would hold for this session without building the list -- a gateway-issued lease through the index (its owner, a viewer, or an admin), a worker's own local lease for a viewer or admin only, by a raw id the index does not rename.
   #leaseGet: Handler<"lease.get"> = (input, session) => {
-    const isAdmin = session.role === "admin";
+    const seesAll = readsEveryLease(session.role);
     const entry = this.options.leaseIndex.resolve(input.leaseId);
     const lease =
       entry === undefined
-        ? isAdmin
+        ? seesAll
           ? this.#localLease(input.leaseId)
           : undefined
-        : isAdmin || entry.ownerId === session.principal
+        : seesAll || entry.ownerId === session.principal
           ? this.#issuedLease(entry)
           : undefined;
     if (lease === undefined) {

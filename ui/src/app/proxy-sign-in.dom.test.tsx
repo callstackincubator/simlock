@@ -6,7 +6,7 @@ import { device, lease, leaseDetails, NOW, worker } from "../test/fixtures";
 import { returnToTab } from "../test/tab";
 
 const EXPIRED_LINE =
-  "Your sign-in proxy's identity was refused: it has expired. You can still sign in with an operator token.";
+  "Your sign-in proxy's identity was refused: it has expired. You can still sign in with an operator or viewer token.";
 const SIGNED_OUT_URL = "https://proxy.example.test/signed-out";
 const SIGN_IN_URL = "https://proxy.example.test/start?rd=/";
 
@@ -73,10 +73,11 @@ function proxyDaemon(
         call.bearer === undefined
           ? {
               name: "Alice",
+              role: "admin",
               ...(options.signOutUrl === undefined ? {} : { signOutUrl: options.signOutUrl }),
               via: "proxy",
             }
-          : { name: state.operators[call.bearer] },
+          : { name: state.operators[call.bearer], role: "admin" },
     })),
     "/v1/inbox": behind(() => ({ body: { items: [] } })),
     "/v1/lease-requests": behind(() => ({ body: { requests: [] } })),
@@ -102,7 +103,7 @@ describe("signing in through a proxy", () => {
     const view = renderConsole({ routes: proxy.routes, token: null });
 
     expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Operator or viewer token")).not.toBeInTheDocument();
     signedInAs("Alice");
 
     const nav = screen.getByRole("navigation", { name: "Console" });
@@ -121,7 +122,7 @@ describe("signing in through a proxy", () => {
     renderConsole({ routes: proxy.routes, token: null });
 
     expect(await screen.findByRole("heading", { level: 1, name: "Signing in…" })).toBeVisible();
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Operator or viewer token")).not.toBeInTheDocument();
     release();
 
     await waitFor(() => signedInAs("Alice"));
@@ -155,7 +156,7 @@ describe("signing in through a proxy", () => {
       "href",
       SIGN_IN_URL,
     );
-    await view.user.type(screen.getByLabelText("Operator token"), "tok_ci");
+    await view.user.type(screen.getByLabelText("Operator or viewer token"), "tok_ci");
     await view.user.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => signedInAs("ci-runner"));
@@ -163,7 +164,7 @@ describe("signing in through a proxy", () => {
     await view.user.click(screen.getByRole("button", { name: "Sign out" }));
 
     await waitFor(() => signedInAs("Alice"));
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Operator or viewer token")).not.toBeInTheDocument();
   });
 
   it("an identity that expires while signed in takes the next request to the token form with that line", async () => {
@@ -176,7 +177,7 @@ describe("signing in through a proxy", () => {
     proxy.state.mode = "expired";
     await returnToTab();
 
-    expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Operator or viewer token")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(EXPIRED_LINE);
   });
 
@@ -224,7 +225,7 @@ describe("signing in through a proxy", () => {
     const proxy = proxyDaemon();
     proxy.state.mode = "expired";
     const first = renderConsole({ routes: proxy.routes, token: null });
-    await first.user.type(await screen.findByLabelText("Operator token"), "tok_ci");
+    await first.user.type(await screen.findByLabelText("Operator or viewer token"), "tok_ci");
     await first.user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByRole("button", { name: "Sign out" })).toBeInTheDocument();
     first.unmount();
@@ -234,7 +235,7 @@ describe("signing in through a proxy", () => {
     renderConsole({ routes: proxy.routes, token: null });
 
     await waitFor(() => signedInAs("Alice"));
-    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Operator or viewer token")).not.toBeInTheDocument();
   });
 
   it("a release succeeds when signed in through the proxy", async () => {

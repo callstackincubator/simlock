@@ -35,11 +35,20 @@ describe("checkIdentity", () => {
           signOutUrl: "https://idp/logout",
           via: "proxy",
         }),
-        { kind: "proxy", name: "Alice", signOutUrl: "https://idp/logout" },
+        { kind: "proxy", name: "Alice", role: "admin", signOutUrl: "https://idp/logout" },
       ],
       [
         json(200, { name: "Bob", principal: "proxy:https://idp#u2", role: "admin", via: "proxy" }),
-        { kind: "proxy", name: "Bob" },
+        { kind: "proxy", name: "Bob", role: "admin" },
+      ],
+      [
+        json(200, {
+          name: "Eve",
+          principal: "proxy:https://idp#u3",
+          role: "viewer",
+          via: "proxy",
+        }),
+        { kind: "proxy", name: "Eve", role: "viewer" },
       ],
       [json(401, simlock("UNAUTHENTICATED", "expired")), { kind: "refused", reason: "expired" }],
       [

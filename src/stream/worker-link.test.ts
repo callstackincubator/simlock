@@ -15,7 +15,7 @@ import { ScriptedFeed, TestRegistry } from "./test-fixtures.js";
 import { createWorkerStreamLink } from "./worker-link.js";
 
 const AGENT: StreamCaller = { principal: "tok_agent", role: "agent" };
-const OPERATOR: StreamCaller = { principal: "tok_op", role: "operator" };
+const OPERATOR: StreamCaller = { principal: "tok_op", role: "admin" };
 const SETTINGS: ScreenSettings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
 const DEVICE = { deviceId: "dev_1" };
 
@@ -262,5 +262,14 @@ describe("the worker's stream link", () => {
     await stream.close();
     expect(feed.closes).toBe(1);
     expect(await harness.captures.stopOnDevice("dev_1")).toBe(0);
+  });
+
+  it("allows a viewer caller to stream a running device by device id", async () => {
+    const harness = setup();
+    const { feed, served } = await opening(harness, { principal: "tok_viewer", role: "viewer" });
+    feed.meta();
+    const stream = await served;
+    expect(stream.meta.codec).toBe("h264");
+    await stream.close();
   });
 });

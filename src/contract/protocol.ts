@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { SimlockError } from "./errors.js";
+import { ROLES } from "./roles.js";
 
 export interface ProtocolRange {
   readonly min: number;
@@ -10,7 +11,7 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /** Widen only once a second version is kept alive side by side with the first; a bump that leaves no shim behind moves both ends. */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 102, max: 102 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 103, max: 103 };
 
 const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
 
@@ -74,7 +75,7 @@ export const helloReplySchema = z.object({
   protocolVersion: z.number().int(),
   daemonProtocolRange: protocolRangeSchema,
   version: z.string(),
-  role: z.enum(["agent", "admin"]),
+  role: z.enum(ROLES),
   principal: z.string(),
 });
 

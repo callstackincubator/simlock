@@ -770,14 +770,14 @@ simlock device remove <id> [--json]
 Create, list and revoke the tokens that agents, operators and workers use to connect. Needs the admin role. See [Give agents and people access](/simlock/docs/gateway/access) and [Add a worker](/simlock/docs/gateway/add-a-worker).
 
 ```text
-simlock token create --role <agent|operator|worker> [--label <text>]
+simlock token create --role <agent|viewer|operator|worker> [--label <text>]
 simlock token list
 simlock token revoke <token-id>
 ```
 
 | Subcommand | Flag | Meaning | Default |
 | --- | --- | --- | --- |
-| `create` | `--role <agent, operator or worker>` | What the token may do. `worker` tokens let a worker join a gateway. Required. | — |
+| `create` | `--role <agent, viewer, operator or worker>` | What the token may do. `viewer` tokens read fleet state and watch screens without mutating anything. `worker` tokens let a worker join a gateway. Required. | — |
 | `create` | `--label <text>` | A name to tell the token apart in `token list`. Must not be empty. | None |
 | `revoke` | `<token-id>` | The ID `token list` shows. Required. | — |
 

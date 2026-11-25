@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import type { z } from "zod";
 
 import type { Identity } from "../auth/index.js";
-import { parseDurationMs, type UsageWindowRefusal } from "../contract/index.js";
+import { parseDurationMs, roleAllows, type UsageWindowRefusal } from "../contract/index.js";
 import type { buildHttpSession } from "./dispatcher-session.js";
 import { badRequest, forbidden } from "./errors.js";
 import type { leaseRequestBodySchema, leaseRequestViewSchema } from "./lease-declarations.js";
@@ -60,12 +60,16 @@ export function requireOwnRequest(identity: Identity, ownerId: string): void {
   throw forbidden("Not permitted to access another requester's resource");
 }
 
-// why: `lease.get` answers `UNKNOWN_LEASE` for a lease that does not exist and for one the session does not own alike, so the 404 does not tell them apart (the narrower, deliberate divergence from the mutating routes below that the known gaps in src/http/AGENTS.md describe).
+// why: `lease.get` answers `UNKNOWN_LEASE` for a lease that does not exist and for one the session does not own alike, so the 404 does not tell them apart (the narrower, deliberate divergence from the mutating routes below that the known gaps in src/http/AGENTS.md describe). Requiring `access` makes every caller choose `"read"` or `"hold"` explicitly so new holder-only sub-routes cannot silently admit viewers.
 export async function findOwnedLease(
   deps: HttpGatewayDeps,
   session: ReturnType<typeof buildHttpSession>,
   id: string,
+  access: "read" | "hold",
 ) {
+  if (access === "hold" && !roleAllows(session.role, "agent")) {
+    throw forbidden("Not permitted for a read-only viewer");
+  }
   const { lease } = await deps.dispatch("lease.get", { leaseId: id }, session);
   return lease;
 }

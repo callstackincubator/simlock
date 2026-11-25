@@ -12,5 +12,5 @@ const WHY: Readonly<Record<string, string>> = {
 
 export function proxyRefusalLine(reason: string): string {
   const why = Object.hasOwn(WHY, reason) ? WHY[reason] : "it was refused";
-  return `Your sign-in proxy's identity was refused: ${why}. You can still sign in with an operator token.`;
+  return `Your sign-in proxy's identity was refused: ${why}. You can still sign in with an operator or viewer token.`;
 }

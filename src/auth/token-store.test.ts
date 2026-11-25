@@ -281,4 +281,61 @@ describe("TokenStore", () => {
       await rm(directory, { force: true, recursive: true });
     }
   });
+
+  it("moves a version 2 tokens table up, keeping row order, worker pins and unique index, and accepting viewer tokens", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-tokens-v2-"));
+    const open = (owner: typeof tokensOwner) =>
+      openStateDatabase({
+        dataDirectory: directory,
+        filesystem: new NodeFilesystem(),
+        logger: new NoopLogger(),
+        oldFiles: [],
+        owners: [owner],
+        sqlite: new NodeSqliteOpener(),
+        upgradeStep: "",
+      });
+    try {
+      const old = await open({
+        ...tokensOwner,
+        migrations: tokensOwner.migrations.slice(0, 2),
+        version: 2,
+      });
+      old.database
+        .prepare(
+          "INSERT INTO tokens (id, hash, role, label, created_at, worker_id) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run("tok_op", "hash-op", "operator", "ops", 1, null);
+      old.database
+        .prepare(
+          "INSERT INTO tokens (id, hash, role, label, created_at, worker_id) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run("tok_wrk", "hash-wrk", "worker", "lab-1", 2, "wrk_a");
+      old.close();
+
+      const state = await open(tokensOwner);
+      try {
+        const { store } = await tokenStore({ database: state.database });
+        const made = await store.create("viewer", "dashboard");
+        await expect(store.list()).resolves.toEqual([
+          { id: "tok_op", hash: "hash-op", role: "operator", label: "ops", createdAt: 1 },
+          {
+            id: "tok_wrk",
+            hash: "hash-wrk",
+            role: "worker",
+            label: "lab-1",
+            createdAt: 2,
+            workerId: "wrk_a",
+          },
+          made.record,
+        ]);
+        await expect(store.verify(made.secret)).resolves.toEqual(made.record);
+        const secondWorker = await store.create("worker", "lab-2");
+        await expect(store.pinWorker(secondWorker.record.id, "wrk_a")).resolves.toBe(false);
+      } finally {
+        state.close();
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
 });

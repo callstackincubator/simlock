@@ -1,6 +1,6 @@
 import type { ApiFailure, Fetch } from "./api";
 import type { LostAnswer } from "./live/connection";
-import { checkIdentity, type IdentityOutcome } from "./identity-check";
+import { checkIdentity, type IdentityOutcome, type SessionRole } from "./identity-check";
 
 const STORAGE_KEY = "simlock.operatorToken";
 
@@ -10,7 +10,12 @@ export type SessionState =
   | { readonly kind: "none"; readonly refusedReason?: string; readonly signInUrl?: string }
   | { readonly kind: "checking" }
   | { readonly kind: "token"; readonly token: string }
-  | { readonly kind: "proxy"; readonly name: string; readonly signOutUrl?: string }
+  | {
+      readonly kind: "proxy";
+      readonly name: string;
+      readonly role?: SessionRole;
+      readonly signOutUrl?: string;
+    }
   | { readonly kind: "ended"; readonly signInUrl?: string };
 
 export interface SessionDeps {
@@ -155,9 +160,12 @@ export function createSession(storage: () => Storage, deps?: SessionDeps): Sessi
 }
 
 function proxyState(outcome: Extract<IdentityOutcome, { kind: "proxy" }>): SessionState {
-  return outcome.signOutUrl === undefined
-    ? { kind: "proxy", name: outcome.name }
-    : { kind: "proxy", name: outcome.name, signOutUrl: outcome.signOutUrl };
+  return {
+    kind: "proxy",
+    name: outcome.name,
+    ...(outcome.role === undefined ? {} : { role: outcome.role }),
+    ...(outcome.signOutUrl === undefined ? {} : { signOutUrl: outcome.signOutUrl }),
+  };
 }
 
 function attempt<T>(call: () => T): T | undefined {

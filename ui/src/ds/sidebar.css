@@ -586,6 +586,12 @@
   white-space: nowrap;
 }
 
+.signed-in-role {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .sidebar-search {
   display: flex;
   align-items: center;

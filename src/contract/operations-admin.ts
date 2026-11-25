@@ -6,7 +6,7 @@ import {
   eventsPageWithoutSince,
 } from "./events-page.js";
 import { defineOperation, type Effect } from "./operation-definition.js";
-import { type Role } from "./roles.js";
+import { type OperationRole, type Role } from "./roles.js";
 import {
   baselineEntrySchema,
   baselineNameSchema,
@@ -71,7 +71,7 @@ export const doctorRun = defineOperation({
 /** Arm order is load-bearing: a full record matches the first arm, so a worker's answer is unchanged. */
 export const listGet = defineOperation({
   name: "list.get",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: z.object({ kind: z.enum(["devices", "leases", "rules", "requests"]).optional() }),
   output: z.union([
@@ -138,7 +138,7 @@ export const baselineSave = defineOperation({
 
 export const baselineList = defineOperation({
   name: "baseline.list",
-  role: "agent",
+  role: "any",
   effect: "read",
   input: z.object({}).strict(),
   output: z.object({ baselines: z.array(baselineEntrySchema).max(1000) }),
@@ -164,7 +164,9 @@ export const baselineRemove = defineOperation({
 
 export const configGet = defineOperation({
   name: "config.get",
-  role: "admin",
+  // why: redacted config is safe for read-only console views, while unredacted secrets stay admin-only.
+  role: (input: { showSecrets?: boolean | undefined }): OperationRole =>
+    input.showSecrets ? "admin" : "viewer",
   effect: "read",
   input: z.object({ showSecrets: z.boolean().optional() }),
   output: configSchema,
@@ -209,7 +211,7 @@ export const daemonUpdate = defineOperation({
 
 export const eventsReplay = defineOperation({
   name: "events.replay",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: z
     .object({
@@ -224,7 +226,7 @@ export const eventsReplay = defineOperation({
 
 export const usageGet = defineOperation({
   name: "usage.get",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: usageWindowSchema,
   output: usageOutputSchema,
@@ -232,7 +234,7 @@ export const usageGet = defineOperation({
 
 export const eventsSubscribe = defineOperation({
   name: "events.subscribe",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: z.object({}),
   output: z.object({ subscribed: z.literal(true), subscriptionId: z.string() }),
@@ -240,7 +242,7 @@ export const eventsSubscribe = defineOperation({
 
 export const eventsUnsubscribe = defineOperation({
   name: "events.unsubscribe",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: z.object({}),
   output: z.object({ subscribed: z.literal(false) }),
@@ -261,7 +263,7 @@ export const tokenCreate = defineOperation({
 
 export const tokenList = defineOperation({
   name: "token.list",
-  role: "admin",
+  role: "viewer",
   effect: "read",
   input: z.object({}),
   output: z.object({ tokens: z.array(tokenRecordSchema) }),
