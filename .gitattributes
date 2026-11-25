@@ -6,3 +6,6 @@ docs/internal/adr/README.md merge=union
 # why: a Windows checkout would otherwise turn text files into CRLF, which breaks the tests that
 # compare file text and the scripts bash runs.
 * text=auto eol=lf
+
+# why: the Windows process-table fixture is a captured PowerShell answer; its CRLF line ends are part of what the parser reads.
+src/ports/fixtures/win32-process-table.txt -text
