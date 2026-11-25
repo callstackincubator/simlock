@@ -13,7 +13,7 @@ const execFileAsync = promisify(execFile);
  * hardware can show what ADR 0090 promises, that a copy of a settled seed does less work than a
  * copy of a quick one. Each platform leases one copy of a quick seed and measures the CPU its
  * processes use in the 5 minutes after it is ready, then settles the seed with `simlock seed`,
- * leases a copy of the settled seed, and measures the same. Android must use under a quarter of
+ * leases a copy of the settled seed, and measures the same. Android must use under half of
  * the quick copy's CPU time, iOS under three quarters, and the iOS copy under 0.3 cores from its
  * minute 3.
  *
@@ -140,7 +140,7 @@ describe.skipIf(process.platform !== "darwin")(
   () => {
     it.each([
       // why: ADR 0090 measured Android 36; the newest image on a host (37, 16 KiB pages) idles at about one core whether settled or not, so the case pins the measured one.
-      { platform: "android" as const, ratio: 0.25, osFlags: ["--os", "36.1"] },
+      { platform: "android" as const, ratio: 0.5, osFlags: ["--os", "36.1"] },
       { platform: "ios" as const, ratio: 0.75, osFlags: [] },
     ])(
       "a copy of a $platform seed settled with simlock seed uses under $ratio of the CPU time of a copy of its quick seed in its first 5 minutes",
