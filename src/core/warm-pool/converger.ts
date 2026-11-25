@@ -266,8 +266,19 @@ export class WarmPool {
     const { clock } = this.options;
     this.#refillHeldUntil = clock.now() + delay;
     if (this.#refillTimer !== undefined) clock.cancel(this.#refillTimer);
+    this.#armRefillTimer(delay);
+  }
+
+  /** why: a timer can fire before the clock `holdFill` reads has reached the deadline; the wait is then re-armed for what is left, as no other event need come before the next tick. */
+  #armRefillTimer(delay: number): void {
+    const { clock } = this.options;
     this.#refillTimer = clock.setTimer(delay, () => {
       this.#refillTimer = undefined;
+      const left = (this.#refillHeldUntil ?? 0) - clock.now();
+      if (left > 0 && !this.#disposed) {
+        this.#armRefillTimer(left);
+        return;
+      }
       this.#trigger();
     });
   }

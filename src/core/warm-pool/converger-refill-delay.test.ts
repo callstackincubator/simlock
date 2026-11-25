@@ -50,6 +50,8 @@ describe("warm pool refill delay", () => {
       devices: readonly VirtualDevice[];
       grants: readonly (readonly [number, string])[];
       options: Parameters<typeof harness>[1];
+      /** why: Node can fire a timer this many ms before its deadline. */
+      early?: number;
     }[] = [
       {
         name: "a configured target with a shut-down device to boot",
@@ -97,6 +99,14 @@ describe("warm pool refill delay", () => {
         options: { refillDelayMs: 45_000, targets: [iphone15] },
       },
       {
+        name: "a wait timer that fires 1 ms early re-arms for what is left",
+        at: 45_000,
+        devices: [leased("l1"), device("s1", "shutdown", 0)],
+        grants: [[0, "l1"]],
+        options: { refillDelayMs: 45_000, targets: [iphone15] },
+        early: 1,
+      },
+      {
         name: "a target that would displace a learned device",
         at: 60_000,
         devices: [leased("l1"), pad],
@@ -104,8 +114,18 @@ describe("warm pool refill delay", () => {
         options: { limit: 2, targets: [iphone15] },
       },
     ];
-    for (const { name, at, devices, grants, options } of table) {
+    for (const { name, at, devices, grants, options, early } of table) {
       const rig = harness(devices, { refillDelayMs, ...options });
+      if (early !== undefined) {
+        const arm = rig.clock.setTimer.bind(rig.clock);
+        let fired = false;
+        rig.clock.setTimer = (delayMs, callback) => {
+          // why: only the refill wait's first timer is early; the tick's timers keep their delays.
+          const shortBy = !fired && delayMs === options?.refillDelayMs ? early : 0;
+          if (shortBy > 0) fired = true;
+          return arm(delayMs - shortBy, callback);
+        };
+      }
       const missed: string[] = [];
       rig.eventBus.subscribe("warm-pool.target-missed", ({ payload }) => {
         missed.push(payload.model);
