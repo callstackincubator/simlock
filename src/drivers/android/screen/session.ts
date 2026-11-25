@@ -25,7 +25,6 @@ import {
   connectScrcpyControl,
   connectScrcpySocket,
   DEVICE_DIRECTORY,
-  errorMessage,
   exitsWithin,
   pushScrcpyServer,
   REMOVE_TIMEOUT_MS,
@@ -36,6 +35,7 @@ import {
 
 export { CLOSE_DEADLINE_MS, CONNECT_RETRY_MS, START_DEADLINE_MS } from "./scrcpy-link.js";
 import { ScrcpyVideoParser } from "./scrcpy-video.js";
+import { errorMessage } from "../../../shared/index.js";
 
 // why: a phone's screen state is read before anything is pushed, and read again only after a wake; a read that outlives this
 // goes on to the push rather than refusing, because only a read that says off is a fact about the screen.

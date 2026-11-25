@@ -29,7 +29,6 @@ import { StartupFailedError } from "./error-code.js";
 import { RelayConnection } from "./relay.js";
 import {
   type Connection,
-  errorMessage,
   errorStack,
   respondError,
   type SessionIdentity,
@@ -44,6 +43,7 @@ import {
   type DaemonServerOptions,
 } from "./server-options.js";
 import { acceptRelayChannel, ConnectionRequests } from "./server-requests.js";
+import { errorMessage } from "../shared/index.js";
 export type { DaemonServerOptions } from "./server-options.js";
 
 export class DaemonServer {
@@ -527,7 +527,7 @@ export class DaemonServer {
       isGatewayUplink: link !== undefined,
       link,
       // why: Overwritten by `Handshake.handle` before any dispatched request can read them -- every
-      // path that reaches `#handleRequest` has `connection.helloReceived === true` by
+      // path that reaches `ConnectionRequests.handle` has `connection.helloReceived === true` by
       // construction (`#dispatchLine` routes to `Handshake.handle` until then). A session has its
       // token's principal from the start, and `hello` keeps it.
       principal: session?.principal ?? "",

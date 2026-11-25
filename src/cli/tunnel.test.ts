@@ -114,7 +114,8 @@ describe("simlock tunnel that cannot run", () => {
       },
       {
         argv: ["--url", "http://10.0.0.5:7300", "reverse", "5173"],
-        message: "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost",
+        message:
+          "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost; to connect over plain http anyway (the token is sent unencrypted), pass --allow-insecure-http or set SIMLOCK_ALLOW_INSECURE_HTTP=1",
       },
       ...[
         "http://127.0.0.1:7300/?x=1",
@@ -230,14 +231,32 @@ describe("simlock tunnel that runs", () => {
         lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
         url: `ws://${host}:7300/v1/leases/L1/tunnel`,
       })),
+      ...[
+        ["--url", "http://100.75.181.35:7300", "--allow-insecure-http"],
+        ["--allow-insecure-http", "--url", "http://100.75.181.35:7300"],
+      ].map((flags) => ({
+        argv: [...flags, "reverse", "5173", "--lease", "L1"],
+        lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
+        url: "ws://100.75.181.35:7300/v1/leases/L1/tunnel",
+      })),
+      {
+        argv: ["reverse", "5173", "--local", "--lease", "L1"],
+        env: {
+          ...ENV,
+          SIMLOCK_ALLOW_INSECURE_HTTP: "1",
+          SIMLOCK_URL: "http://100.75.181.35:7300",
+        },
+        lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
+        url: "ws://100.75.181.35:7300/v1/leases/L1/tunnel",
+      },
       {
         argv: ["reverse", "5173"],
         lines: ["reverse device:5173 -> localhost:5173 (lease only)"],
         url: "ws://127.0.0.1:7300/v1/leases/only/tunnel",
       },
     ];
-    for (const { argv, authorization, lines, url } of ok) {
-      const cli = command(ENV);
+    for (const { argv, authorization, env, lines, url } of ok) {
+      const cli = command(env ?? ENV);
       cli.httpJson.answers.set("http://127.0.0.1:7300/v1/identity", {
         body: { role: "agent" },
         status: 200,

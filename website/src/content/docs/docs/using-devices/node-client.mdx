@@ -62,7 +62,8 @@ const client = await connectSimlock({
 });
 ```
 
-- **`url`** is the farm's origin, with no path: `https://`, or `http://` only for `127.0.0.1`, `[::1]` and `localhost`.
+- **`url`** is the farm's origin, with no path: `https://`, or `http://` only for `127.0.0.1`, `[::1]` and `localhost`, or for any host with `allowInsecureHttp: true` (the token then travels unencrypted).
+- **`allowInsecureHttp`**, an optional boolean, is the opt-in for plain `http://` to a farm that is not on this machine.
 - **`token`**'s role is the session's role, and the token is the requester. It cannot go with `endpoint` or `principal`.
 - **`signal`**, an optional `AbortSignal`, stops the connection attempt.
 

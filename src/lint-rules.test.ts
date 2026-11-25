@@ -299,6 +299,25 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
+    "fails a shared file importing a component, a package or a Node module, and passes its own siblings",
+    [
+      ["fails", "src/shared/x.ts", "../core/index.js"],
+      ["fails", "src/shared/x.ts", "zod", "unbuilt"],
+      ["fails", "src/shared/x.ts", "node:path"],
+      ["passes", "src/shared/x.ts", "./y.js"],
+    ],
+  ],
+  [
+    "passes the CLI router, the updater and modules importing shared's index, and fails the router importing ports",
+    [
+      ["passes", "src/cli/errors.ts", "../shared/index.js"],
+      ["passes", "src/cli/errors.ts", "../agent-identity/index.js"],
+      ["fails", "src/cli/errors.ts", "../ports/index.js"],
+      ["passes", "src/updater/x.ts", "../shared/index.js"],
+      ["passes", "src/modules/x.ts", "../shared/index.js"],
+    ],
+  ],
+  [
     "fails a file inside drivers importing past the ios or android index from outside it, and passes the index",
     [
       ["fails", "src/drivers/installer-process.ts", "./ios/prerequisites.js"],
@@ -943,5 +962,50 @@ describe("the time outside src/ports/", () => {
 
     expect(sources).toEqual(expect.arrayContaining(["src/core/registry.ts", "src/daemon/main.ts"]));
     expect(found).toEqual(KNOWN_TIME_READS);
+  });
+});
+
+// why: architecture rule 10 for the error-message unwrap, which no import rule can see: src/shared
+// holds the one `errorMessage`, so no other source of src/ writes its own copy or its inline form.
+const ERROR_MESSAGE_COPY =
+  /\binstanceof\s+Error\s*\?\s*[\w$.]+\.message\s*:\s*String\s*\(|\bfunction\s+errorMessage\b/g;
+
+const errorMessageCopies = (text: string): number =>
+  blankSource(text, { strings: true }).match(ERROR_MESSAGE_COPY)?.length ?? 0;
+
+describe("the error-message unwrap outside src/shared/", () => {
+  it("is written nowhere but in src/shared/, as a copy of errorMessage or inline", () => {
+    expect(
+      errorMessageCopies(
+        [
+          "const one = e instanceof Error ? e.message : String(e);",
+          "const dotted = r.error instanceof Error ? r.error.message : String(r.error);",
+          "const split = e instanceof Error\n  ? e.message\n  : String(e);",
+          "const inside = `failed: ${e instanceof Error ? e.message : String(e)}`;",
+          ["function", "errorMessage(error: unknown): string { return ''; }"].join(" "),
+          "// e instanceof Error ? e.message : String(e)",
+          "const quoted = 'e instanceof Error ? e.message : String(e)';",
+          "const other = e instanceof Error ? e.stack : String(e);",
+        ].join("\n"),
+      ),
+    ).toBe(5);
+    const sources = spawnSync("git", ["ls-files", "src/*.ts", "src/*.tsx"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    })
+      .stdout.split("\n")
+      .filter(
+        (name) => name !== "" && !name.startsWith("src/shared/") && !/\.test\.tsx?$/.test(name),
+      );
+    const found = Object.fromEntries(
+      sources
+        .map(
+          (name) => [name, errorMessageCopies(readFileSync(join(repoRoot, name), "utf8"))] as const,
+        )
+        .filter(([, count]) => count > 0),
+    );
+
+    expect(sources).toEqual(expect.arrayContaining(["src/cli/errors.ts", "src/mcp/connect.ts"]));
+    expect(found).toEqual({});
   });
 });

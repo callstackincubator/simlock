@@ -10,8 +10,12 @@ export class FarmUrlError extends Error {
   }
 }
 
-// why: the one rule for a farm's URL, shared by `simlock tunnel` and the remote typed client (ADR 0081 §3): https, or http for loopback only, and the origin alone. The scheme is judged before the origin. `name` is how the caller calls the value (`--url`, `` `url` ``), and the result is the farm's origin.
-export function checkedFarmUrl(text: string, name: string): string {
+// why: the one rule for a farm's URL, shared by `simlock tunnel` and the remote typed client (ADR 0081 §3): https, or http for loopback, or for any host when the caller opts in (`insecure.allowed`), and the origin alone. The scheme is judged before the origin. `name` is how the caller calls the value (`--url`, `` `url` ``), `insecure.hint` is the opt-in the caller's refusal names, and the result is the farm's origin.
+export function checkedFarmUrl(
+  text: string,
+  name: string,
+  insecure: { readonly allowed: boolean; readonly hint: string },
+): string {
   let parsed: URL | undefined;
   try {
     parsed = new URL(text);
@@ -21,10 +25,15 @@ export function checkedFarmUrl(text: string, name: string): string {
   const allowed =
     parsed !== undefined &&
     (parsed.protocol === "https:" ||
-      (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname)));
+      (parsed.protocol === "http:" && (insecure.allowed || LOOPBACK_HOSTS.has(parsed.hostname))));
   if (parsed === undefined || !allowed || text.length > MAX_URL_CHARS) {
+    const refusal = `${name} must be https://, or http:// only for 127.0.0.1, [::1] or localhost`;
+    const refusedForItsHost =
+      parsed?.protocol === "http:" && text.length <= MAX_URL_CHARS && !allowed;
     throw new FarmUrlError(
-      `${name} must be https://, or http:// only for 127.0.0.1, [::1] or localhost`,
+      refusedForItsHost
+        ? `${refusal}; to connect over plain http anyway (the token is sent unencrypted), ${insecure.hint}`
+        : refusal,
     );
   }
   if (parsed.pathname !== "/" || /[?#]/.test(text)) {

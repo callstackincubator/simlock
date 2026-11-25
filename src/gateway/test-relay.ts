@@ -8,6 +8,7 @@ import type { SentFrame } from "../simlock-client/test-support.js";
 import type { WorkerDirectory } from "./fleet-ports.js";
 import { GatewayRelay, type TwoWayRelay } from "./index.js";
 import type { GatewayWorkerClient } from "./worker-client.js";
+import { errorMessage } from "../shared/index.js";
 
 export const WORKER_ID = "wrk_a";
 
@@ -175,7 +176,7 @@ export async function outcome<T>(promise: Promise<T>) {
     (value) => ({ state: "fulfilled" as const, value }),
     (error: unknown) => ({
       code: (error as { code?: unknown } | null)?.code,
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
       state: "rejected" as const,
     }),
   );

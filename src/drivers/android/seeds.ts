@@ -38,6 +38,7 @@ import { OWNERSHIP_PROBE_TIMEOUT_MS, type Ownership } from "./ownership.js";
 import { SeedTurns } from "./seed-turns.js";
 import { AndroidSourceTable, type SourceRow } from "./source-data.js";
 import { systemImagePackage, type SystemImages } from "./system-images.js";
+import { errorMessage } from "../../shared/index.js";
 
 // why: Saving the boot snapshot writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
@@ -1063,9 +1064,7 @@ export class Seeds {
       });
     } catch (error: unknown) {
       await this.#removeAfterFailure(toHome);
-      throw new DriverCrashError(
-        `${failure}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new DriverCrashError(`${failure}: ${errorMessage(error)}`);
     } finally {
       release();
     }

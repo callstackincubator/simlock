@@ -9,6 +9,7 @@ import {
   NoopLogger,
   type TimerHandle,
 } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 interface HostLoadCpu {
   readonly busyPercent: number;
@@ -205,5 +206,5 @@ function busyPercent(
 }
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
