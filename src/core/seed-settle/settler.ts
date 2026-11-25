@@ -1,5 +1,6 @@
 import type { EventMap } from "../../bus/index.js";
 import { type Logger, NoopLogger, type TimerHandle } from "../../ports/index.js";
+import { errorMessage } from "../../shared/index.js";
 import { capacityDevices } from "../capacity/index.js";
 import type { Platform, VirtualSpec } from "../domain.js";
 import { type DriverSource, SeedSettleFailedError, SeedSettlerStoppedError } from "../driver.js";
@@ -178,7 +179,7 @@ class SeedSettlerImpl implements SeedSettler {
             spec.platform,
             spec.model,
             "failed",
-            `seed ${spec.model} could not be settled: ${error instanceof Error ? error.message : String(error)}`,
+            `seed ${spec.model} could not be settled: ${errorMessage(error)}`,
           ),
         );
       });
@@ -524,7 +525,7 @@ class SeedSettlerImpl implements SeedSettler {
     } catch (error: unknown) {
       const ended =
         running.abortReason === undefined
-          ? { message: errorText(error).slice(0, 500), outcome: "failed" as const }
+          ? { message: errorMessage(error).slice(0, 500), outcome: "failed" as const }
           : { outcome: "aborted" as const, reason: running.abortReason };
       this.#emit("seed.settle-ended", target, {
         durationMs: this.options.clock.now() - startedAt,
@@ -578,7 +579,7 @@ class SeedSettlerImpl implements SeedSettler {
   #failed(target: Target, running: Running, error: unknown): void {
     const { operator } = target;
     this.#logger.warn("a seed settle failed", {
-      message: errorText(error),
+      message: errorMessage(error),
       model: target.kind.model,
       osVersion: target.kind.osVersion,
       platform: target.platform,
@@ -598,15 +599,11 @@ class SeedSettlerImpl implements SeedSettler {
           target.platform,
           entry.spec.model,
           "failed",
-          `seed ${entry.spec.model} could not be settled: ${errorText(error)}`,
+          `seed ${entry.spec.model} could not be settled: ${errorMessage(error)}`,
         ),
       );
     }
   }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isQuickSeed(source: DriverSource): boolean {
