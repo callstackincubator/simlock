@@ -163,6 +163,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const launch = (port: number) =>
     startDaemon({
       clock,
+      hostLoadProbe: null,
       configOverrides: {
         ...(options.enabled === "unset"
           ? {}
