@@ -825,6 +825,13 @@ function sourceStaleReason(
       ? "saved from a simulator made before simulators stopped sharing folders; save it again from a new lease"
       : "saved before simulators stopped sharing folders; save it again";
   }
+  return (
+    catalogStaleReason(row, catalog) ??
+    (row.udid !== undefined && !folders.has(row.udid) ? `simulator ${row.udid} is gone` : undefined)
+  );
+}
+
+function catalogStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
   const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
   if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
   if (
@@ -837,7 +844,6 @@ function sourceStaleReason(
   if (!catalog.deviceTypes.some((entry) => entry.identifier === row.deviceTypeId)) {
     return `device type ${row.deviceTypeId} is not available`;
   }
-  if (row.udid !== undefined && !folders.has(row.udid)) return `simulator ${row.udid} is gone`;
   return undefined;
 }
 
