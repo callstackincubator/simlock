@@ -26,7 +26,7 @@ describe("resolveDaemonSocketPath", () => {
   });
 
   /**
-   * The boundary itself, because the three cases above pass against a limit of 104 or 108 as
+   * why: The boundary itself, because the three cases above pass against a limit of 104 or 108 as
    * readily as against the correct 103/107. `sun_path` holds the terminating NUL, so the
    * usable length is one less than the struct field -- an off-by-one here is a socket the
    * kernel refuses with `EINVAL` at bind time, which is the failure this check exists to
@@ -44,9 +44,9 @@ describe("resolveDaemonSocketPath", () => {
     expect(() => resolveDaemonSocketPath(`${atLimit}x`, platform)).toThrow(SocketPathTooLongError);
   });
 
-  /** A multi-byte home is measured in bytes, not UTF-16 code units -- `sun_path` is bytes. */
+  /** why: A multi-byte home is measured in bytes, not UTF-16 code units -- `sun_path` is bytes. */
   it("measures the limit in bytes, not characters", () => {
-    // 60 two-byte characters plus "/daemon.sock" is 132 bytes but only 72 code units, so a
+    // why: 60 two-byte characters plus "/daemon.sock" is 132 bytes but only 72 code units, so a
     // length-based check would wave it through on both platforms.
     const home = `/${"é".repeat(60)}`;
     expect(home.length).toBeLessThan(103);

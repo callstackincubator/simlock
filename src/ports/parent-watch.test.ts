@@ -63,7 +63,7 @@ describe("NodeParentWatch", () => {
 
     child.kill("SIGKILL");
 
-    // Real time against a 20ms poll, so bounded generously -- but a watch that never notices
+    // why: Real time against a 20ms poll, so bounded generously -- but a watch that never notices
     // fails here, by name, rather than on the test's own timeout.
     await vi.waitFor(() => expect(exitedState.state).toBe("fulfilled"), {
       interval: 20,
@@ -88,7 +88,7 @@ describe("NodeParentWatch", () => {
     handle.stop();
     child.kill("SIGKILL");
 
-    // Give the poll interval a few chances to fire were the watch still active.
+    // why: Give the poll interval a few chances to fire were the watch still active.
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(exited).toBe(false);
   });

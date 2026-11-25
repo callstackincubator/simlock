@@ -20,7 +20,6 @@ export interface LeaseRequestInput {
   readonly imageTag?: string;
   readonly baseline?: string;
   readonly physical?: boolean;
-  /** Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
   readonly leaseId?: string;
   readonly runId?: string;
@@ -44,18 +43,14 @@ export interface LeasePayload {
   readonly ttlMs: number;
   readonly dataPlane: null;
   readonly mode?: "slim" | "full";
-  /** The image tag the device was created from, on a device whose request named one. */
   readonly imageTag?: string;
   readonly baseline?: { readonly name: string; readonly version: number };
-  /** The worker a gateway-issued lease lives on, as its lease record names it. Absent from a
-   * worker's own lease. */
   readonly worker?: { readonly id: string; readonly label?: string | undefined };
-  /** `worker.id`, flat, for the aggregate lists: present exactly when `worker` is. */
   readonly workerId?: string;
 }
 
 /**
- * `LeaseRecord` has no `createdAt` -- `grantedAt` is its equivalent. `ttlMs` is read straight
+ * why: `LeaseRecord` has no `createdAt` -- `grantedAt` is its equivalent. `ttlMs` is read straight
  * off the lease record (ADR 0004: the daemon stores the width a lease was granted with, or
  * last renewed with), so it survives a daemon restart along with the deadline and this gateway
  * remembers nothing per request to produce it. It is never derived as `ttlDeadline -
@@ -90,7 +85,7 @@ export function buildLeasePayload(
     ...(device.except === undefined ? {} : { except: device.except }),
     ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
     ...(device.spec.baseline === undefined ? {} : { baseline: device.spec.baseline }),
-    // `workerId` derives from `worker` so the two never disagree.
+    // why: `workerId` derives from `worker` so the two never disagree.
     ...(lease.worker === undefined ? {} : { worker: lease.worker, workerId: lease.worker.id }),
   };
 }
@@ -159,7 +154,6 @@ export interface TrackedRequestView {
   readonly id: string;
   readonly requesterId: string;
   readonly platform: "ios" | "android";
-  /** The principal that sent the request -- what reading or cancelling it is authorized on. */
   readonly ownerId: string;
   readonly createdAt: string;
   readonly state: RequestSnapshot;
@@ -171,7 +165,7 @@ export type CancelOutcome =
   | { readonly kind: "not-cancellable"; readonly leaseId?: string };
 
 /**
- * The daemon's stored lease requests, as this resource reads them: a worker's leasing
+ * why: The daemon's stored lease requests, as this resource reads them: a worker's leasing
  * request book, or a gateway's fleet coordinator's. `record` is read through the contract's
  * `leaseRequestRecordSchema` rather than trusted, because the two backends store different grant
  * types and this module names neither.
@@ -186,7 +180,7 @@ export interface LeaseRequestReader {
 
 export interface LeaseRequestTrackerOptions {
   /**
-   * ADR 0003 §2: HTTP calls the exact same shared `Dispatcher` the socket path does -- not a
+   * why: ADR 0003 §2: HTTP calls the exact same shared `Dispatcher` the socket path does -- not a
    * second copy of "call `LeaseCommands.request`, apply the download policy, set `ownerId`".
    * Routing `lease.request`/`lease.cancel` through this closes the download-policy divergence
    * (the clamp lives inside the dispatcher's `lease.request` handler now, so HTTP gets it for
@@ -197,7 +191,7 @@ export interface LeaseRequestTrackerOptions {
   readonly requests: LeaseRequestReader;
   readonly clock: Clock;
   /**
-   * Whether `allowDownload` answers the `POST` as soon as the request is stored (the default).
+   * why: Whether `allowDownload` answers the `POST` as soon as the request is stored (the default).
    * A gateway sets it `false`: it never downloads, so there is nothing slow to outlast the
    * `POST`, and a request it rejects as unservable must fail the `POST` instead.
    */
@@ -205,7 +199,7 @@ export interface LeaseRequestTrackerOptions {
 }
 
 /**
- * `POST /v1/lease-requests` and the routes that read it back. The request itself is the daemon's
+ * why: `POST /v1/lease-requests` and the routes that read it back. The request itself is the daemon's
  * stored record -- this class holds no request state of its own, so a request answers `GET`
  * across a daemon restart and whichever frontend sent it. What lives here is the HTTP shape:
  * deciding when a `POST` answers `201` rather than an error, and turning a stored record and
@@ -215,7 +209,7 @@ export class LeaseRequestTracker {
   constructor(private readonly options: LeaseRequestTrackerOptions) {}
 
   /**
-   * Answers `created` once the daemon has stored the request and either reported progress, or
+   * why: Answers `created` once the daemon has stored the request and either reported progress, or
    * granted it, or -- for `allowDownload`, whose spec resolution can run for minutes before any
    * progress -- as soon as it is stored. A rejection that lands before any of those fails the
    * `POST` itself, so a client is not made to poll a resource just to learn it was refused. A
@@ -240,7 +234,7 @@ export class LeaseRequestTracker {
         settled = true;
         resolve({ kind: "created", view });
       };
-      // The grant is the answer whatever the record says, so this one always settles: from
+      // why: The grant is the answer whatever the record says, so this one always settles: from
       // the stored record when it is there to read, from the request itself when it is not
       // (pruned already, or never named).
       const settleGranted = (state: RequestSnapshot): void => {
@@ -268,7 +262,6 @@ export class LeaseRequestTracker {
         onProgress: () => settleCreated(),
         onRequestAdmitted: (id, replayed) => {
           requestId = id;
-          // A repeat names a request that already exists: answer with it, whatever its state.
           if (
             replayed ||
             (body.allowDownload === true && this.options.answerDownloadsEarly !== false)
@@ -281,7 +274,7 @@ export class LeaseRequestTracker {
       this.options
         .dispatch("lease.request", leaseRequestDispatchInput(body, idempotencyKey), session)
         .then(
-          // The `201` is built from the grant itself, so it does not wait on the request
+          // why: The `201` is built from the grant itself, so it does not wait on the request
           // record: the daemon writes the granted result in the lease's own commit, and a
           // gateway's book writes it when its settle runs.
           (grant) =>
@@ -310,7 +303,6 @@ export class LeaseRequestTracker {
     return toView(parsed.data, found.progress);
   }
 
-  /** Registers a listener for future state changes only -- it does not fire for the current state. */
   subscribe(id: string, listener: (state: RequestSnapshot) => void): (() => void) | undefined {
     return this.options.requests.watch(id, () => {
       const view = this.get(id);
@@ -319,7 +311,7 @@ export class LeaseRequestTracker {
   }
 
   /**
-   * Resolves early on the next state change, else once `seconds` elapses; `undefined` if
+   * why: Resolves early on the next state change, else once `seconds` elapses; `undefined` if
    * `id` is unknown. An aborted `signal` (the HTTP request's own -- the client hung up)
    * also finishes immediately, so a disconnected long-poll releases its listener and timer
    * right away instead of pinning them for the full requested wait.
@@ -351,7 +343,7 @@ export class LeaseRequestTracker {
   }
 
   /**
-   * Cancels a pending request via `dispatch("lease.cancel", ...)` -- the exact operation the
+   * why: Cancels a pending request via `dispatch("lease.cancel", ...)` -- the exact operation the
    * socket path's `lease.cancel` uses, authorize hook included (ADR: "cancels this principal's
    * pending request by requester id"). The request book reports a cancelled wait as cancelled
    * from the moment it is rejected, before the record is written, so a `GET` right after the
@@ -371,7 +363,7 @@ export class LeaseRequestTracker {
       session,
     );
     if (result === "cancelled") return { kind: "cancelled" };
-    // Settled between the check above and this call (e.g. granted in the interim) -- report
+    // why: Settled between the check above and this call (e.g. granted in the interim) -- report
     // the now-current state rather than a stale answer.
     const after = this.get(id)?.state;
     if (after?.stage === "granted") return { kind: "not-cancellable", leaseId: after.lease.id };
@@ -384,7 +376,6 @@ export class LeaseRequestTracker {
   }
 }
 
-/** A request waiting on a component download: the same fields on the wire and in the resource. */
 interface DownloadingProgress {
   readonly stage: "downloading";
   readonly component: string;
@@ -392,7 +383,7 @@ interface DownloadingProgress {
   readonly percent?: number | undefined;
 }
 
-/** Structural subset of `LeaseProgress` (`src/core/domain.ts`) -- this module only ever
+/** why: Structural subset of `LeaseProgress` (`src/core/domain.ts`) -- this module only ever
  * receives it through a dispatched `lease.request`'s session `onProgress` override, never
  * imports the core type directly. */
 type HttpLeaseProgress =
@@ -403,7 +394,7 @@ type HttpLeaseProgress =
   | { readonly stage: "reclaiming"; readonly etaMs: number };
 
 /**
- * Structural subsets of the *contract's* `lease.request` output shape (`z.infer<leaseGrantSchema>`
+ * why: Structural subsets of the *contract's* `lease.request` output shape (`z.infer<leaseGrantSchema>`
  * -- see `schemas.ts`), not core's `DeviceRecord`/`LeaseRecord`: `dispatch()` always returns
  * contract-shaped data, which need not match core's own types field for field, and this module
  * never imports core domain types at all -- everything it needs from a grant is these few fields.
@@ -419,7 +410,6 @@ export interface HttpLeaseDevice {
     readonly imageTag?: string | undefined;
     readonly baseline?: { readonly name: string; readonly version: number } | undefined;
   };
-  /** Absent only for a physical device, which has no mode. */
   readonly mode?: "slim" | "full" | undefined;
   /** why: absent when the lease keeps no category running. */
   readonly except?: readonly string[] | undefined;
@@ -432,7 +422,6 @@ interface HttpLeaseRecord {
   readonly ttlDeadline: number;
   readonly runId?: string | undefined;
   readonly label?: string | undefined;
-  /** ADR 0005 §18: set on a lease a gateway issued, naming the worker it lives on. */
   readonly worker?: { readonly id: string; readonly label?: string | undefined } | undefined;
 }
 
@@ -469,12 +458,10 @@ function toSnapshot(
       stage: "failed",
     };
   }
-  // Open with no progress reported yet: the request is admitted and about to queue.
   if (progress === undefined) return { queuePosition: 1, stage: "queued" };
   return openSnapshot(progress);
 }
 
-/** An open request's state, from the progress its live wait last reported. */
 function openSnapshot(progress: HttpLeaseProgress): RequestSnapshot {
   if (progress.stage === "queued")
     return { queuePosition: progress.queuePosition, stage: "queued" };

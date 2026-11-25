@@ -12,7 +12,6 @@ import {
   ScriptedProcessRunner,
 } from "./index.js";
 
-/** Signal-0 liveness probe: asks the kernel whether the pid exists without signalling it. */
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -124,14 +123,14 @@ describe("ScriptedProcessRunner: spawnStreaming", () => {
       },
     });
 
-    // The chunks are delivered one at a time, each awaited before the next -- so they land by
+    // why: The chunks are delivered one at a time, each awaited before the next -- so they land by
     // the time the command reports its exit, which is the ordering every consumer relies on.
     await expect(handle.wait()).resolves.toEqual({ code: 4, signal: null });
     expect(seen).toEqual(["stdout:out-1", "stderr:err-1", "stdout:out-2"]);
   });
 
   it("waits for a slow consumer before delivering the next chunk", async () => {
-    // The scripted counterpart of pausing a real child's readable: a delivery that has not
+    // why: The scripted counterpart of pausing a real child's readable: a delivery that has not
     // resolved is a consumer that cannot take more yet, and nothing may run ahead of it.
     const runner = new ScriptedProcessRunner([
       {
@@ -200,7 +199,7 @@ describe("ScriptedProcessRunner: spawnStreaming", () => {
 
 describe("NodeProcessRunner: spawnStreaming", () => {
   it("stops reading the child while a delivery is pending, and resumes once it resolves", async () => {
-    // ADR 0005 §19e end to end: "never buffered" only holds if the slow end can push back, so
+    // why: ADR 0005 §19e end to end: "never buffered" only holds if the slow end can push back, so
     // a delivery that has not resolved pauses the child's stream. The child below writes far
     // more than a pipe buffer holds, so if this leaked the whole thing would arrive anyway.
     const runner = new NodeProcessRunner();
@@ -225,7 +224,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       },
     );
 
-    // Long enough for an unpaused stream to have delivered the rest several times over.
+    // why: Long enough for an unpaused stream to have delivered the rest several times over.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(seen).toHaveLength(1);
 
@@ -297,7 +296,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   });
 
   it("does not settle wait() while a chunk's delivery is still pending past the exit grace window, even though a real pipe already delivered what the child wrote after it", async () => {
-    // The defect this guards: a paused readable never emits `close`, so the exit-to-close
+    // why: The defect this guards: a paused readable never emits `close`, so the exit-to-close
     // grace window used to treat "quiet because we paused it" the same as "quiet because the
     // child is gone" and settled `wait()` while a chunk still sat undelivered. Round 4's test-
     // title finding: the second chunk here ("before-exit-B") is *not* what proves the guard --
@@ -332,8 +331,6 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     // (100ms here) the old code settled on, while the first chunk's delivery is deliberately still
     // unresolved.
     await new Promise((resolve) => setTimeout(resolve, 400));
-    // Both chunks already arrived -- the paused stream drained at EOF -- and `wait()` still
-    // has not settled, since the first delivery is what it is actually waiting on.
     expect(seen.join("")).toBe("before-exit-Abefore-exit-B");
     let settledEarly = false;
     void handle.wait().then(() => {
@@ -353,7 +350,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   }, 10_000);
 
   it("rejects wait() instead of silently truncating when a chunk's delivery never resolves after exit", async () => {
-    // The deferral this handle allows for an outstanding delivery is not unbounded -- but
+    // why: The deferral this handle allows for an outstanding delivery is not unbounded -- but
     // reaching that bound with a delivery still stuck must not look like a clean exit. A
     // caller that got `{ exitCode: 0 }` here would have no way to know the command's output
     // was incomplete; a rejection is the visible failure ADR 0005 §19e's "streamed, never
@@ -367,10 +364,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       {
         onChunk: (_stream, chunk) => {
           seen.push(chunk);
-          return new Promise<void>(() => {
-            // Never resolves: models a consumer (an SSE write, a socket write) whose
-            // backpressure never clears.
-          });
+          return new Promise<void>(() => {});
         },
       },
     );
@@ -457,7 +451,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   }, 10_000);
 
   it("writes `input` to the child's stdin and then closes it", async () => {
-    // ADR 0005 §19c's one-shot stdin: the child sees the string and then EOF, which is what
+    // why: ADR 0005 §19c's one-shot stdin: the child sees the string and then EOF, which is what
     // lets a line-oriented command that reads stdin finish at all.
     const runner = new NodeProcessRunner();
     let stdout = "";
@@ -491,7 +485,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   });
 
   it("does not signal a process group once the child has already exited (round 4 hardening)", async () => {
-    // `killProcessTree` calls `process.kill(-pid, signal)` directly, bypassing
+    // why: `killProcessTree` calls `process.kill(-pid, signal)` directly, bypassing
     // `ChildProcess.kill`'s own "already exited" guard. `wait()` can be deferred up to
     // `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` past the real `exit` event (a chatty grandchild, a
     // stalled delivery), and Node frees a reaped pid for the kernel to recycle once it has
@@ -574,7 +568,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
   );
 
   it("kills the grandchildren too, because the signal goes to the process group", async () => {
-    // The reason `kill` signals `-pid` rather than the child: a tool that forks (an
+    // why: The reason `kill` signals `-pid` rather than the child: a tool that forks (an
     // `adb`/`emulator` wrapper script, `simctl spawn`) leaves the work in a *grandchild*, and a
     // timeout that reaped only the direct child would leave that running with nothing left to
     // reap it. Verified against a real grandchild rather than asserted from the code: with the
@@ -586,7 +580,7 @@ describe("NodeProcessRunner: spawnStreaming", () => {
       process.execPath,
       [
         "-e",
-        // The parent prints the grandchild's pid, then both sit still. `detached` on the
+        // why: The parent prints the grandchild's pid, then both sit still. `detached` on the
         // grandchild puts it in this group but out of the parent's own reach, which is the
         // case that matters.
         "const { spawn } = require('node:child_process');" +
@@ -699,7 +693,7 @@ describe("NodeProcessRunner", () => {
   });
 
   it("reports a spawn that never produced a process instead of crashing the daemon", async () => {
-    // Node reports a failed spawn by emitting `error` asynchronously, and an `error` with no
+    // why: Node reports a failed spawn by emitting `error` asynchronously, and an `error` with no
     // listener ends the process outright -- no catch can help. So the listener is attached
     // before anything throws, and the failure comes back as something a caller can handle:
     // an `adb` that is not executable, `ETXTBSY` mid-update, or `EAGAIN` under the memory
@@ -710,7 +704,7 @@ describe("NodeProcessRunner", () => {
       ProcessSpawnError,
     );
 
-    // Past the tick the `error` event would arrive on: still here, still able to assert.
+    // why: Past the tick the `error` event would arrive on: still here, still able to assert.
     await new Promise((resolve) => setImmediate(resolve));
     await expect(runner.run("/nonexistent/simlock-adb", [], longDeadline)).rejects.toBeInstanceOf(
       ProcessSpawnError,
@@ -814,7 +808,7 @@ describe("NodeProcessRunner", () => {
 
   it("settles wait() when a detached grandchild keeps the stdio pipe open after the process exits", async () => {
     const runner = new NodeProcessRunner({ exitGraceMs: 100 });
-    // The child forks its own detached grandchild that inherits our pipe's write
+    // why: The child forks its own detached grandchild that inherits our pipe's write
     // end, prints the grandchild's pid, then exits immediately -- reproducing the
     // real defect, where a surviving grandchild silences `close` even though the
     // process wait() is meant to be waiting for is already gone.
@@ -838,7 +832,7 @@ describe("NodeProcessRunner", () => {
       grandchildPid = Number((await lines.next()).value);
       const printedAt = Date.now();
 
-      // Race a generous but bounded timeout so a regression here fails as a clear
+      // why: Race a generous but bounded timeout so a regression here fails as a clear
       // assertion instead of vitest's own suite-wide test timeout.
       const result = await Promise.race([
         handle.wait(),
@@ -859,7 +853,7 @@ describe("NodeProcessRunner", () => {
         try {
           process.kill(grandchildPid, "SIGKILL");
         } catch {
-          // Already gone by the time we get here.
+          // why: Already gone by the time we get here.
         }
       }
     }
@@ -880,7 +874,7 @@ describe("NodeProcessRunner", () => {
             process.execPath,
             [
               "-e",
-              // console.log appends its own newline, which keeps this three-deep
+              // why: console.log appends its own newline, which keeps this three-deep
               // nested source free of escape sequences that have to survive two
               // rounds of string parsing on the way down.
               "let n = 0; const t = setInterval(() => { console.log('chunk-' + n); if (++n === 6) { clearInterval(t); setTimeout(() => {}, 3_000); } }, 100);",
@@ -909,7 +903,7 @@ describe("NodeProcessRunner", () => {
         try {
           process.kill(grandchildPid, "SIGKILL");
         } catch {
-          // Already gone by the time we get here.
+          // why: Already gone by the time we get here.
         }
       }
     }
@@ -917,7 +911,7 @@ describe("NodeProcessRunner", () => {
 });
 
 describe("NodeProcessRunner: line ends", () => {
-  // Writes each argument as its own chunk, 50 ms apart, so a test controls where one chunk
+  // why: Writes each argument as its own chunk, 50 ms apart, so a test controls where one chunk
   // ends and the next begins.
   const writeChunks =
     "const parts = process.argv.slice(1); let i = 0;" +

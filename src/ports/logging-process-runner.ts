@@ -19,7 +19,7 @@ export interface LoggingProcessRunnerOptions {
 }
 
 /**
- * Writes one `debug` line per device command when it settles: the command, its arguments, its
+ * why: Writes one `debug` line per device command when it settles: the command, its arguments, its
  * exit code (or the error it threw) and how long it took. Never its environment, its input, or
  * anything it printed -- an environment can hold credentials, and a `device.exec` command's
  * output belongs to the caller who ran it, not to the daemon log.
@@ -81,7 +81,6 @@ export class LoggingProcessRunner implements ProcessRunner {
     return handle;
   }
 
-  /** A child that could not be started at all throws here, synchronously: log it, rethrow. */
   #watchStart<Handle>(
     command: string,
     args: readonly string[],

@@ -56,7 +56,7 @@ describe("hardening from review", () => {
   });
 
   it("reports the lease's own stored ttlMs, with nothing gateway-side to remember", async () => {
-    // ADR 0004: the width lives on the lease record, so a payload served by a gateway that
+    // why: ADR 0004: the width lives on the lease record, so a payload served by a gateway that
     // never saw the request (after a daemon restart, say) still reports the real width
     // instead of a mode default standing in for one.
     const { app, registry } = buildHarness();
@@ -71,13 +71,6 @@ describe("hardening from review", () => {
   });
 });
 
-/**
- * ADR 0005 §23. The routes themselves are thin -- one dispatch each -- so what is worth
- * asserting is which daemon has them at all, that they reach the right operation with the id
- * from the path, and that a refusal's typed `details` reach the body. What a worker's own
- * dispatcher answers for all four operations is proven in `src/daemon/dispatcher.test.ts`;
- * `e2e/single-host-fleet.test.ts` drives `GET /v1/workers` and the drain route end to end.
- */
 describe("POST /v1/update", () => {
   const answer = (overrides: Record<string, unknown> = {}) => ({
     started: false,

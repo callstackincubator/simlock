@@ -11,13 +11,13 @@ import { Hono } from "hono";
 import type { Clock, Logger, TimerHandle } from "../ports/index.js";
 
 /**
- * Where `pnpm build` writes the console (ADR 0011 §2): `dist/ui`, beside this module's own
+ * why: Where `pnpm build` writes the console (ADR 0011 §2): `dist/ui`, beside this module's own
  * `dist/http`. Found from the module's URL, never from the working directory, so a daemon
  * started from anywhere serves the console it was built with.
  */
 const BUILT_CONSOLE_ROOT = fileURLToPath(new URL("../ui", import.meta.url));
 
-/** ADR 0011 §4: on every console response. `connect-src 'self'` is what keeps the browser
+/** why: ADR 0011 §4: on every console response. `connect-src 'self'` is what keeps the browser
  * from sending anything to another host, whatever a dependency tries. */
 export const CONSOLE_CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -36,7 +36,6 @@ export interface HttpGatewayOptions {
   readonly host: string;
   readonly port: number;
   readonly logger: Logger;
-  /** The built console's directory. Defaults to `dist/ui` beside this module; tests pass their own. */
   readonly consoleRoot?: string;
   /** why: the linger after an answer sent before its request body ended runs on it, so a test drives it with a fake clock. */
   readonly clock: Clock;
@@ -53,12 +52,12 @@ export interface HttpGatewayOptions {
 }
 
 /**
- * The one bit of `Hono` this file depends on -- deliberately structural (not `import
+ * why: The one bit of `Hono` this file depends on -- deliberately structural (not `import
  * type { Hono } from "hono"`) so this class doesn't have to match `createHttpApp`'s
  * specific `Env` type parameter; `app.fetch` is exactly what `serve()` wants.
  */
 export interface FetchApp {
-  // `any` (not `unknown`) for `env`/`executionCtx` deliberately: Hono's own `fetch` types
+  // why: `any` (not `unknown`) for `env`/`executionCtx` deliberately: Hono's own `fetch` types
   // them permissively per its `Env` type parameter, and this interface exists purely to
   // let any `Hono<...>` instance satisfy it regardless of that parameter -- `unknown`
   // here would make assignment fail on parameter contravariance instead.
@@ -66,7 +65,7 @@ export interface FetchApp {
 }
 
 /**
- * ADR 0011 §3: the web console in front of `app.fetch`. `/v1` and everything under it goes to
+ * why: ADR 0011 §3: the web console in front of `app.fetch`. `/v1` and everything under it goes to
  * the app untouched, so the API keeps its own auth, its own `404`s and its request log. Every
  * other path is the console's:
  *
@@ -104,7 +103,7 @@ export function withConsole(app: FetchApp, options: { root: string; logger: Logg
 }
 
 /**
- * Whether a path names a page (`/workers`) rather than a file (`/favicon.svg`). Nothing under
+ * why: Whether a path names a page (`/workers`) rather than a file (`/favicon.svg`). Nothing under
  * `/assets/` is a page: that directory holds only built files, which are cached for good, so
  * the page must never be answered there.
  */
@@ -114,7 +113,7 @@ function isPagePath(path: string): boolean {
 }
 
 /**
- * ADR 0011 §4: set on the finished response, after the file is read. Only a file actually
+ * why: ADR 0011 §4: set on the finished response, after the file is read. Only a file actually
  * found under `/assets/` is cached for good -- its name carries a content hash -- while
  * `index.html`, every other file and every `404` is revalidated, so a new release shows on the
  * next load.
@@ -138,7 +137,7 @@ function withConsoleHeaders(response: Response, pathname: string): Response {
 }
 
 /**
- * The impure serve adapter -- the only file under `src/http` allowed to import
+ * why: The impure serve adapter -- the only file under `src/http` allowed to import
  * `@hono/node-server` (or any `node:http`); everything else stays a pure
  * `Request -> Response` function (see `app.ts`'s own comment). Wraps `serve()`/
  * `server.close()` behind `start`/`stop`.
@@ -170,9 +169,7 @@ export class HttpGateway {
     this.#clock = options.clock;
   }
 
-  /** Resolves once listening, with the actual bound port (matches the configured one in v1, since port 0 is never used here). */
   start(): Promise<{ readonly port: number }> {
-    // ADR 0011 §3: the console is served whenever HTTP is, in both modes; no key turns it off.
     const site = withConsole(this.#app, { logger: this.#logger, root: this.#consoleRoot });
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -189,7 +186,7 @@ export class HttpGateway {
           resolve({ port: info.port });
         },
       ) as Server;
-      // Only matters before "listening" fires -- e.g. EADDRINUSE. A post-listen socket
+      // why: Only matters before "listening" fires -- e.g. EADDRINUSE. A post-listen socket
       // error is a per-connection concern, not a `start()` failure.
       server.once("error", (error: unknown) => {
         if (settled) return;
@@ -208,21 +205,20 @@ export class HttpGateway {
         });
       });
       this.#server = server;
-      // Before `listening` fires deliberately: an upgrade cannot arrive until the server is
+      // why: Before `listening` fires deliberately: an upgrade cannot arrive until the server is
       // listening, and wiring it here means there is no window where a connection is accepted
       // with no `upgrade` handler attached.
       this.#onServerCreated?.(server);
     });
   }
 
-  /** Closes the listener and destroys any connection still open, in-flight SSE streams included. */
   async stop(): Promise<void> {
     const server = this.#server;
     if (server === undefined) return;
     this.#server = undefined;
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error === undefined ? resolve() : reject(error)));
-      // Destroyed right after asking for the graceful close, not before: an ordinary
+      // why: Destroyed right after asking for the graceful close, not before: an ordinary
       // request already in flight gets to finish (its socket isn't in `#sockets` as
       // "still open" from the server's perspective any differently than an SSE one,
       // but it settles fast enough that the destroy below rarely if ever races it,

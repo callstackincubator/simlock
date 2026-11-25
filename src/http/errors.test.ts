@@ -92,7 +92,7 @@ describe("mapError", () => {
     });
   });
 
-  // Review finding B5: these four previously fell through `mapError`'s own hand-written
+  // why: Review finding B5: these four previously fell through `mapError`'s own hand-written
   // `instanceof` chain (which didn't have branches for them) to 500 INTERNAL, while the socket
   // transport's `errorCode` (now `classifyError`, shared by both) reported the real code. Each
   // assertion below is checked against `ERROR_TABLE` directly -- the single source both
@@ -124,7 +124,7 @@ describe("mapError", () => {
     expect(mapped).toEqual({ code: "INTERNAL", message: "Internal error", status: 500 });
   });
 
-  // Round 4, F1: this used to be unrecognized -- not "explicitly INTERNAL", just absent from
+  // why: Round 4, F1: this used to be unrecognized -- not "explicitly INTERNAL", just absent from
   // `classifyError` entirely, which is what let it fall through the *other* branch this
   // finding fixes (Dispatcher#awaitExec's timeout throw being pre-empted by this very
   // rejection). Asserted directly against `classifyError`, not just `mapError`'s ??
@@ -146,7 +146,7 @@ describe("mapError", () => {
     expect(mapped).toMatchObject({ code: "WORKER_CONNECTED", extra: { workerId: "wrk_1" } });
   });
 
-  // Hardening: `DispatchError.details` is `unknown` -- nothing at the type level stops a
+  // why: Hardening: `DispatchError.details` is `unknown` -- nothing at the type level stops a
   // handler from attaching an object to a code `ErrorDetailsMap` declares as
   // `Record<string, never>` (no details at all). Before this fix, `mapError`'s only gate was
   // "is `.details` object-shaped", which this would have passed straight through onto the
