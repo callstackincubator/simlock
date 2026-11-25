@@ -114,7 +114,8 @@ describe("simlock tunnel that cannot run", () => {
       },
       {
         argv: ["--url", "http://10.0.0.5:7300", "reverse", "5173"],
-        message: "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost",
+        message:
+          "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost; to connect over plain http anyway (the token is sent unencrypted), pass --allow-insecure-http or set SIMLOCK_ALLOW_INSECURE_HTTP=1",
       },
       ...[
         "http://127.0.0.1:7300/?x=1",

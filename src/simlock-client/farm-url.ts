@@ -27,8 +27,13 @@ export function checkedFarmUrl(
     (parsed.protocol === "https:" ||
       (parsed.protocol === "http:" && (insecure.allowed || LOOPBACK_HOSTS.has(parsed.hostname))));
   if (parsed === undefined || !allowed || text.length > MAX_URL_CHARS) {
+    const refusal = `${name} must be https://, or http:// only for 127.0.0.1, [::1] or localhost`;
+    const refusedForItsHost =
+      parsed?.protocol === "http:" && text.length <= MAX_URL_CHARS && !allowed;
     throw new FarmUrlError(
-      `${name} must be https://, or http:// only for 127.0.0.1, [::1] or localhost`,
+      refusedForItsHost
+        ? `${refusal}; to connect over plain http anyway (the token is sent unencrypted), ${insecure.hint}`
+        : refusal,
     );
   }
   if (parsed.pathname !== "/" || /[?#]/.test(text)) {
