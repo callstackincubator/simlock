@@ -228,10 +228,14 @@ function tokensOf(section) {
 }
 
 function blockedOn(body) {
-  const heading = /^#{2,4} Blocked on[ \t]*$/m.exec(body);
-  if (heading === null) return "no Blocked on section";
-  const lines = body.slice(heading.index + heading[0].length).split("\n");
-  return lines.map((line) => line.trim()).find((line) => line !== "") ?? "empty";
+  // why: a handoff's part is a heading or an emphasised label with its text on the same line; body-rules.mjs accepts both.
+  const label =
+    /^(?:- )?(?:#{2,6}[ \t]+)?(?:\*\*|__|\*|_)?Blocked on(?:\*\*|__|\*|_)?:?(?:\*\*|__)?[ \t]*(.*)$/m.exec(
+      body,
+    );
+  if (label === null) return "no Blocked on section";
+  const below = body.slice(label.index + label[0].length).split("\n");
+  return [label[1], ...below].map((line) => line.trim()).find((line) => line !== "") ?? "empty";
 }
 
 function rate(fixed, found) {
