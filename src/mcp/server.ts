@@ -92,6 +92,7 @@ function leaseProgressParams(progress: LeaseProgressNotice): {
       ? { message: `Downloading ${progress.component}`, progress: base }
       : {
           message: `Downloading ${progress.component} (${percent}%)`,
+          // why: The contract bounds `percent` to a whole number from 0 to 100.
           progress: base + percent * 10,
         };
   }

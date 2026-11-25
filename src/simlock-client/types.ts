@@ -68,6 +68,11 @@ export type TokenListOutput = OpOutput<"token.list">;
 export type TokenRevokeInput = OpInput<"token.revoke">;
 export type TokenRevokeOutput = OpOutput<"token.revoke">;
 
+// why: Declared on the admin client like every other admin row. A *worker* answers them as a fleet
+// of one (ADR 0012): `worker.list` returns the worker itself, and drain, undrain and remove
+// answer `UNSUPPORTED_IN_WORKER_MODE`. They are not gated client-side: the daemon says what it
+// is, rather than the client guessing from a mode it was never told.
+
 export type WorkerListOutput = OpOutput<"worker.list">;
 /** One worker as the gateway currently sees it, or a single host as it sees itself -- the shape
  * `simlock worker list` renders. */
