@@ -34,9 +34,9 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "devDependencies": {
-    "@e2e-dev/mobile": "0.12.7",
-    "agent-device": "0.21.37",
-    "e2e": "0.23.1"
+    "@e2e-dev/mobile": "0.12.8",
+    "agent-device": "0.21.41",
+    "e2e": "0.24.0"
   },
   "peerDependencies": {
     "@e2e-dev/mobile": ">=0.12.5 <1",
