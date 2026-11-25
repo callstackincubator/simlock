@@ -87,7 +87,6 @@ export class FakeRegistry implements QuarantineRegistry {
       return { ...rest, state: "deleted" };
     });
   }
-  /** Test-only escape hatch to simulate a device leaving quarantine out of band. */
   // fallow-ignore-next-line unused-class-member -- the quarantine tests call it on the harness this file builds.
   forceState(deviceId: string, state: VirtualDevice["state"]): void {
     this.#update(deviceId, (device) => ({ ...device, state }));
@@ -153,7 +152,6 @@ export async function createHarness(
   return { bus, claims, clock, coordinator, driver, notifyAvailability, registry, target };
 }
 
-/** Lets the microtask queue (the fire-and-forget retry chain) settle after a timer fires. */
 export async function flush(): Promise<void> {
   for (let count = 0; count < 100; count += 1) await Promise.resolve();
 }

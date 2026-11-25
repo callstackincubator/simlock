@@ -56,7 +56,7 @@ interface CoreOptions {
   /** why: the worker's memory pressure step; absent when host load is off, so a reader sees no step. */
   readonly memoryPressure?: MemoryPressureReader;
   /**
-   * The daemon's one `ComponentInstaller`, built and closed by the composition root. Warm-pool
+   * why: The daemon's one `ComponentInstaller`, built and closed by the composition root. Warm-pool
    * provisioning and startup convergence never install through it (safety rule 4); every device
    * provisioned is claimed through it, so none is created on a component being removed (ADR 0010
    * §8).
@@ -64,12 +64,11 @@ interface CoreOptions {
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
   readonly config: CoreConfig;
   /**
-   * The one decision gate every registry write runs inside. Passed in rather than built here
+   * why: The one decision gate every registry write runs inside. Passed in rather than built here
    * because `components` writes the registry too and must share it.
    */
   readonly decisions: SerializedDecision;
   readonly drivers: readonly Driver[];
-  /** Drivers that refused to start, reported by `doctor` on every run. */
   readonly driverRejections?: readonly DriverRejection[] | undefined;
   readonly eventBus: EventBus;
   /** why: the seed settler reads free disk, as the reaper does (ADR 0090 §2). */
@@ -77,17 +76,15 @@ interface CoreOptions {
   /** why: the path the reaper reads free disk at, so both read the same disk. */
   readonly diskPath?: string | undefined;
   /**
-   * Where work core finishes off its callers' paths reports its failures. A backgrounded
+   * why: Where work core finishes off its callers' paths reports its failures. A backgrounded
    * reclaim has no caller left to reject to, so without this its only trace is the device's own
    * registry state.
    */
   readonly logger?: Logger | undefined;
-  /** ADR 0015 §4: the model names to try for each class, per platform, operator's list first. */
   readonly modelPreferences?: ModelPreferences | undefined;
   readonly optionalModules?:
     | (() => readonly OptionalModuleFinding[] | Promise<readonly OptionalModuleFinding[]>)
     | undefined;
-  /** The checks `doctor` runs per platform this host could run. None if omitted. */
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[] | undefined;
   readonly serviceCheck?: ServiceCheck | undefined;
   readonly registry: Registry;
@@ -149,17 +146,15 @@ export interface Core {
   readonly quarantine: QuarantineCoordinator;
   readonly reclaim: ReclaimCoordinator;
   readonly registry: Registry;
-  /** Supplies the ports leasing implements. Call it once, before any request is admitted. */
   connect(ports: CorePorts): void;
   readStartup(): Promise<StartupRead>;
   converge(read: StartupRead): Promise<void>;
   /**
-   * Runs a warm pool pass now. Leasing calls it once a backgrounded reclaim has given up its
+   * why: Runs a warm pool pass now. Leasing calls it once a backgrounded reclaim has given up its
    * claim: `device.reclaimed` fires while that claim is still held, so the pass it triggers sees
    * the device as busy, and this is the first moment the pool can act on it.
    */
   passWarmPool(): Promise<void>;
-  /** The devices the idle shutdown timer leaves alone: those a warm target keeps. */
   targetedDevices(): Promise<ReadonlySet<string>>;
   settle(): Promise<void>;
   drain(): Promise<void>;
@@ -402,7 +397,7 @@ export function createCore(options: CoreOptions): Core {
   });
   const doctor = new Doctor({
     baselines,
-    // Without this, a backgrounded reclaim -- which holds its device in `reclaiming` for a full
+    // why: Without this, a backgrounded reclaim -- which holds its device in `reclaiming` for a full
     // erase, and is now how every release purges -- reads as a stalled transition.
     claims,
     clock: options.clock,
@@ -457,7 +452,7 @@ export function createCore(options: CoreOptions): Core {
     quarantineRestore: { restore: (include) => quarantine.restore(include) },
     registry,
     spentDeviceDeletion: {
-      // A failed delete must not stop the daemon from starting: the device stays `shutdown`
+      // why: A failed delete must not stop the daemon from starting: the device stays `shutdown`
       // and ungrantable, and the next start (or the idle delete rule) tries again.
       deleteSpent: async (device) => {
         try {

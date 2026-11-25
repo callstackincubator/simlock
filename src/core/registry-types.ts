@@ -21,15 +21,11 @@ export interface RegistryOptions {
   readonly state: StateDatabase;
   readonly deviceData: ReadonlyMap<Platform, DeviceDataTable>;
   /**
-   * `lease.identity`: the policy a newly registered device is stamped with, looked up by its
+   * why: `lease.identity`: the policy a newly registered device is stamped with, looked up by its
    * spec's platform. Only registration reads it -- a loaded record keeps the policy it was
    * created under. Defaults to `reusable` for both platforms.
    */
   readonly leaseIdentity?: Readonly<Record<Platform, LeaseIdentity>>;
-  /**
-   * `lease.requestRetentionMs` and `lease.maxRequestRecords`: how long a settled lease request is
-   * kept and how many are kept at most. Defaults to the config defaults.
-   */
   readonly leaseRequestLimits?: LeaseRequestLimits;
   /** why: `devices.deletedRetentionMs`, how long a `deleted` device record is kept; defaults to the config default. */
   readonly deletedRetentionMs?: number;
@@ -38,19 +34,12 @@ export interface RegistryOptions {
 }
 
 export interface RegistrySnapshot {
-  /** Every device: the records of `devices`, then those of `physicalDevices`. */
   readonly devices: readonly DeviceRecord[];
   readonly virtualDevices: readonly VirtualDevice[];
   readonly leases: readonly LeaseRecord[];
   readonly components: readonly ComponentRecord[];
 }
 
-/**
- * The fourth record type: a component Simlock installed (ADR 0010 §5). `receipt` is the
- * driver's own, opaque to the core and compared only for equality -- a component is Simlock's
- * when a record's receipt equals the receipt of something installed now. One record per platform
- * and version: a later install of the same version replaces it.
- */
 export interface ComponentRecord {
   readonly platform: Platform;
   readonly version: string;

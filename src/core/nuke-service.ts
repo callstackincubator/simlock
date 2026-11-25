@@ -5,20 +5,17 @@ import type { NukeExecutor } from "./core-ports.js";
 import type { SeedSettler } from "./seed-settle/index.js";
 import { stableError } from "./stable-error.js";
 
-/** Release maintenance boundary required by an operator reset. */
 export interface LeaseMaintenance {
   beginMaintenance(): Promise<void>;
   releaseAllDuringMaintenance(reason: "killed", platform?: Platform): Promise<readonly string[]>;
   endMaintenance(): Promise<void>;
 }
 
-/** Acquisition maintenance boundary required by an operator reset. */
 export interface AcquisitionMaintenance {
   beginMaintenance(): Promise<void>;
   endMaintenance(): Promise<void>;
 }
 
-/** Read-only registry view used to select Simlock-owned device records. */
 export interface NukeRegistryView {
   readonly snapshot: {
     readonly virtualDevices: readonly VirtualDevice[];
@@ -26,7 +23,6 @@ export interface NukeRegistryView {
   };
 }
 
-/** Managed operations; implementations own driver calls, claims, and state commits. */
 export interface NukeDeviceLifecycle {
   shutdown(
     target: VirtualDevice,

@@ -57,7 +57,6 @@ export function cloneLeaseRequest(record: LeaseRequestRecord): LeaseRequestRecor
   return { ...record, request: { ...record.request } };
 }
 
-/** The one device event a transition carries must be the one its states call for, about this device. */
 export function assertTransitionEvent(
   device: DeviceRecord,
   to: DeviceState,

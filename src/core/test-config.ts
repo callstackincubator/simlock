@@ -2,14 +2,13 @@ import type { Config } from "./index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 
-/** Narrows the capacity block for assertions on resource-strategy configs. */
 export function resourceOptions(config: Config): ResourceStrategyOptions {
   if (config.capacity.strategy !== "resource") throw new Error("expected the resource strategy");
   return config.capacity.config;
 }
 
 /**
- * The walk `simlock config get <key>` performs over the daemon's config, reproduced here
+ * why: The walk `simlock config get <key>` performs over the daemon's config, reproduced here
  * so a driver block is proven reachable by dotted key and not just present in the object.
  */
 export function dottedValue(config: Config, key: string): unknown {

@@ -302,7 +302,7 @@ describe("loadConfig", () => {
       ios: { deviceRoot: "/Volumes/scratch/simlock-ios" },
       android: { adbServerPort: 5038, headless: true, somethingOnlyTheDriverKnows: "yes" },
     });
-    // Warning about an unrecognised key here would mean the core knows which keys a
+    // why: Warning about an unrecognised key here would mean the core knows which keys a
     // driver has, which is the whole thing this block is not allowed to know.
     expect(warn).not.toHaveBeenCalled();
   });

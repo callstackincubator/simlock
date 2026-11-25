@@ -98,7 +98,6 @@ describe("Registry", () => {
     await registry.beginRelease(lease.id);
     clock.advance(7_000);
     const shutDown = await registry.completeReclaimWithoutPurge(device.id);
-    // Every path into `shutdown` stamps it, the reclaim's own included.
     expect(shutDown.shutdownAt).toBe(8_000);
 
     const quarantined = await registry.enterQuarantine(device.id, 5_000, { kind: "purge-failed" });
@@ -107,7 +106,7 @@ describe("Registry", () => {
   });
 
   it("refuses to quarantine a device that is still leased", async () => {
-    // Quarantine is a post-release disposition: it is only ever entered from `reclaiming`, which
+    // why: Quarantine is a post-release disposition: it is only ever entered from `reclaiming`, which
     // a device reaches by having its lease released. A leased device reaching it would mean
     // pulling a device out from under its holder -- the one thing safety rule 2 forbids outright.
     const clock = new FakeClock(1_000);

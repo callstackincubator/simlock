@@ -1,5 +1,5 @@
 /**
- * Serializes short state read/decide/commit sections.
+ * why: Serializes short state read/decide/commit sections.
  *
  * Callers must keep driver work and other long-running I/O outside `run`.
  */

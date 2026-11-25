@@ -11,7 +11,6 @@ const INSTANCE_FILE_MODE = 0o600;
 export interface InstanceIdentityOptions {
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
-  /** `${SIMLOCK_HOME}/instance.json`. */
   readonly path: string;
 }
 
@@ -46,7 +45,7 @@ export async function loadInstanceId(options: InstanceIdentityOptions): Promise<
   const generated = options.idGenerator.generate();
 
   try {
-    // An exclusive create, never a plain write: checking that the file is absent and then
+    // why: An exclusive create, never a plain write: checking that the file is absent and then
     // writing it is a race two daemons starting at once do lose. The loser's write would
     // land on top of an identity the winner had already stamped into its roots, and every
     // one of them would read `wrong-instance` from then on. Here the kernel picks the
@@ -68,7 +67,6 @@ export async function loadInstanceId(options: InstanceIdentityOptions): Promise<
   return generated;
 }
 
-/** The identity another process wrote first: this one adopts it rather than competing. */
 async function requireWritten(options: InstanceIdentityOptions): Promise<string> {
   const written = await readInstanceId(options);
   if (written === undefined) {
@@ -81,7 +79,7 @@ async function requireWritten(options: InstanceIdentityOptions): Promise<string>
   return written;
 }
 
-/** `undefined` only when the file is genuinely absent -- unreadable is not the same as absent. */
+/** why: `undefined` only when the file is genuinely absent -- unreadable is not the same as absent. */
 async function readInstanceId(options: InstanceIdentityOptions): Promise<string | undefined> {
   const { filesystem, path } = options;
 

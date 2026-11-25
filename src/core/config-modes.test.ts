@@ -3,10 +3,6 @@ import { MemoryFilesystem } from "../ports/index.js";
 import { loadConfig } from "./index.js";
 import { configPath, createStats } from "./test-config.js";
 
-/**
- * ADR 0005 §1/§2: `mode` selects what the daemon is, and a gateway reads only `mode`, `http.*`,
- * `log.*`, `lease.*`, `eventBuffer.*` and `gateway.*`.
- */
 describe("loadConfig modes (ADR 0005)", () => {
   async function load(
     contents: unknown,
@@ -97,7 +93,6 @@ describe("loadConfig modes (ADR 0005)", () => {
     await expect(load({ http: { enabled: false } }, { role: "gateway" })).rejects.toThrow(
       "http.enabled",
     );
-    // HTTP is genuinely optional for a worker.
     await expect(load({ http: { enabled: false } })).resolves.toMatchObject({
       http: { enabled: false },
       mode: "worker",
@@ -123,9 +118,8 @@ describe("loadConfig modes (ADR 0005)", () => {
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "capacity"'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "ios"'));
-    // Ignored, not rejected: the file still loads, and the gateway-readable keys still apply.
     expect(config.lease.defaultTtlMs).toBe(60_000);
-    // "Ignored" means "nothing in gateway mode reads it" -- the value is still parsed and
+    // why: "Ignored" means "nothing in gateway mode reads it" -- the value is still parsed and
     // merged, so a config file can be shared between a worker and a gateway with only `mode`
     // differing. The warning is what makes that visible rather than silent.
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Ignoring "lease"'));
@@ -178,7 +172,6 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(warn).toHaveBeenCalledWith(
       'Ignoring "android": it configures a worker, and this daemon runs in gateway mode.',
     );
-    // Ignored, not rejected: the gateway still starts.
     expect(config.mode).toBe("gateway");
   });
 
@@ -239,7 +232,7 @@ describe("loadConfig modes (ADR 0005)", () => {
   });
 
   it("refuses a worker that names a gateway but no join token, and the reverse", async () => {
-    // Either alone is an operator half-finishing a join, and a worker that silently never
+    // why: Either alone is an operator half-finishing a join, and a worker that silently never
     // joined looks exactly like one whose gateway is down -- so this fails the start instead.
     await expect(load({ gateway: { url: "ws://fleet.example" } })).rejects.toThrow("gateway.token");
     await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
