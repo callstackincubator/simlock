@@ -16,7 +16,6 @@ describe("aggregateCatalog", () => {
     platform: "ios" as const,
     runtimes: ["26.0"],
   };
-  // B has 25.4 installed, but only the iPad pairs with it there.
   const iosOnB = {
     defaultRuntime: "26.0",
     modelAliases: {},
@@ -136,7 +135,7 @@ describe("aggregateCatalog", () => {
       modelClasses,
     });
 
-    // Listed with the later id first, so the answer cannot come from input order.
+    // why: Listed with the later id first, so the answer cannot come from input order.
     const catalog = aggregateCatalog([
       view({ catalog: [classed({ "iPad Pro": "phone", "iPhone 17": "tv" })], id: "wrk_b" }),
       view({ catalog: [classed({ "iPhone 17": "phone" })], id: "wrk_a" }),
@@ -166,7 +165,7 @@ describe("aggregateCatalog", () => {
   });
 
   it("carries a class default only when every connected worker reports the same one", () => {
-    // Every default names a model its worker lists, so a disagreement reaches agreedClassDefaults.
+    // why: Every default names a model its worker lists, so a disagreement reaches agreedClassDefaults.
     const withDefaults = (
       classDefaults: Record<string, string>,
       base: typeof iosOnA | typeof iosOnB = iosOnA,
@@ -229,7 +228,7 @@ describe("aggregateCatalog", () => {
       view({ catalog: [iosOnA], id: "wrk_a" }),
       view({ catalog: [{ ...iosOnB, defaultRuntime: "25.4" }], id: "wrk_b" }),
     ]);
-    // Picking one at random would make `simlock lease` non-deterministic across an unchanged
+    // why: Picking one at random would make `simlock lease` non-deterministic across an unchanged
     // fleet, so a fleet that disagrees has no default.
     expect(disagreed.platforms[0]?.defaultRuntime).toBeUndefined();
   });
@@ -299,7 +298,6 @@ describe("aggregateCatalog", () => {
       view({ catalog: [iosOnB], id: "wrk_b" }),
     ]);
 
-    // 25.4 is in the fleet's runtimes, and iPhone 17 is in its models, but no worker pairs them.
     expect(catalog.platforms[0]?.runtimes).toContain("25.4");
     expect(catalog.platforms[0]?.modelRuntimes).toEqual({
       "iPad Pro": ["25.4", "26.0"],
@@ -349,7 +347,7 @@ describe("aggregateCatalog", () => {
   });
 
   it("treats a model a worker names after an Object.prototype member like any other", () => {
-    // Wire input: a worker that lists `constructor` without pairing it must not make the fleet
+    // why: Wire input: a worker that lists `constructor` without pairing it must not make the fleet
     // catalog read the inherited function.
     const odd = OPERATIONS["catalog.get"].output.parse({
       platforms: [
@@ -385,7 +383,7 @@ describe("aggregateCatalog", () => {
       view({ catalog: [iosOnB], id: "wrk_b" }),
     ]);
 
-    // 25.4 is in the fleet (on B, for the iPad only); A's claim to pair it is not A's to make.
+    // why: 25.4 is in the fleet (on B, for the iPad only); A's claim to pair it is not A's to make.
     expect(catalog.platforms[0]?.modelRuntimes["iPhone 17"]).toEqual(["26.0"]);
   });
 
@@ -564,7 +562,7 @@ describe("aggregateCatalog", () => {
         expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).not.toThrow();
       }
 
-      // Worker b connects first, so what survives the cut is decided by sort order, not arrival.
+      // why: Worker b connects first, so what survives the cut is decided by sort order, not arrival.
       const catalog = aggregateCatalog([
         view({ catalog: [valid[1]!], id: "wrk_b" }),
         view({ catalog: [valid[0]!], id: "wrk_a" }),
@@ -592,7 +590,6 @@ describe("aggregateCatalog", () => {
           models: names(prefix),
         });
 
-      // The worker first in id order holds the names that sort last.
       const catalog = aggregateCatalog([
         view({ catalog: [worker("zm")], id: "wrk_a" }),
         view({ catalog: [worker("am")], id: "wrk_b" }),
@@ -622,7 +619,7 @@ describe("aggregateCatalog", () => {
           catalog: [androidOn({ customModels: ["My Tablet", "Ghost"], models: ["My Tablet"] })],
           id: "wrk_a",
         }),
-        // Another worker lists Ghost, but only the worker that marks a name can make it custom.
+        // why: Another worker lists Ghost, but only the worker that marks a name can make it custom.
         view({ catalog: [androidOn({ models: ["Ghost"] })], id: "wrk_b" }),
       ]);
 

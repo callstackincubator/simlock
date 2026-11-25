@@ -14,7 +14,7 @@ import {
 const daemonDir = join(srcDir, "daemon");
 
 /**
- * What the gateway, the daemon, core, drivers and the contract may import is enforced by
+ * why: What the gateway, the daemon, core, drivers and the contract may import is enforced by
  * `pnpm lint` (`.oxlintrc.json`, ADR 0018 §4), one file's imports at a time. What stays here
  * follows imports further than lint can.
  */

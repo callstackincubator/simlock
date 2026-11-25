@@ -22,7 +22,7 @@ import { NoopLogger } from "../ports/index.js";
  * (`FleetForwarding` splits only to name the worker in that `WORKER_UNREACHABLE` answer).
  */
 
-/** One lease this gateway knows it issued. `requesterId`/`ownerId` are the *fleet-level*
+/** why: One lease this gateway knows it issued. `requesterId`/`ownerId` are the *fleet-level*
  * identities -- `requesterId` with no `gw:<instance>:` prefix (what the client itself used),
  * `ownerId` the real principal ADR §27a rescued from a round trip through the worker. */
 export interface FleetLeaseEntry {
@@ -37,8 +37,6 @@ export interface FleetLeaseEntry {
   readonly idChosenByRequester?: boolean;
 }
 
-/** The subset of a worker-reported lease record this index needs to recognize and rebuild its
- * own entries from (`WorkerView.leases`'s element shape, structurally). */
 export interface WorkerReportedLease {
   readonly id: string;
   readonly deviceId?: string;
@@ -46,7 +44,6 @@ export interface WorkerReportedLease {
   readonly ownerId: string;
   readonly grantedAt: number;
   readonly runId?: string | undefined;
-  /** ADR 0020: whether the requester chose `id`. Absent, the id is a generated one. */
   readonly idChosenByRequester?: boolean;
 }
 
@@ -55,7 +52,7 @@ export interface ReportedDevice {
   readonly spec: { readonly platform: Platform };
 }
 
-/** A lease record projected for a fleet client: rewritten to the gateway's id and fleet-level
+/** why: A lease record projected for a fleet client: rewritten to the gateway's id and fleet-level
  * requester, with `worker` attached, when the index recognizes it; passed through unchanged
  * (plus `workerId`) when it does not -- a worker's own local lease, which this gateway never
  * issued and has no business renaming (test: "lease.list rewrites ids only for gateway-issued
@@ -78,12 +75,12 @@ export class FleetLeaseIndex {
   readonly #platforms = new Map<string, Platform>();
   readonly #removalListeners: ((entry: FleetLeaseEntry) => void)[] = [];
   readonly #endListeners: ((entry: FleetLeaseEntry) => void)[] = [];
-  /** C3 (round 2 review): one strictly-increasing counter per worker, bumped on every
+  /** why: C3 (round 2 review): one strictly-increasing counter per worker, bumped on every
    * `rebuildFromWorker` call for that worker -- what lets reconciliation (below) tell "missing
    * from this snapshot" apart from "missing for a whole extra snapshot in a row" without
    * comparing clocks across two processes. */
   readonly #generation = new Map<string, number>();
-  /** C3: the generation at which an entry attributed to a still-known worker was first found
+  /** why: C3: the generation at which an entry attributed to a still-known worker was first found
    * absent from a `rebuildFromWorker` snapshot. Cleared the moment the entry is reported again
    * (the race this guards against is a one-snapshot fluke, not a real disappearance), and read
    * again by the *next* `rebuildFromWorker` call for that worker: still absent one full
@@ -103,21 +100,17 @@ export class FleetLeaseIndex {
     private readonly logger: Logger = new NoopLogger(),
   ) {}
 
-  /** `gw:<this gateway's instance id>:` -- what marks a requester id as this gateway's own
+  /** why: `gw:<this gateway's instance id>:` -- what marks a requester id as this gateway's own
    * (§14/§27). Exposed so `FleetLeaseCoordinator` namespaces outgoing requester ids with the
    * exact same value this index recognizes them by. */
   get requesterPrefix(): string {
     return this.gatewayRequesterPrefix;
   }
 
-  /** Whether a worker-reported requester id is one this gateway sent (§14/§27): the one place
-   * the gateway answers that, for its leases and for the requests waiting on its workers. */
   isGatewayRequester(requesterId: string): boolean {
     return requesterId.startsWith(this.gatewayRequesterPrefix);
   }
 
-  /** Every entry, for `lease.release-all` (§34's own-leases-only filter) and for a caller
-   * reconciling worker ids that disappeared entirely (`forgetWorker`). */
   all(): readonly FleetLeaseEntry[] {
     return [...this.#byGatewayId.values()];
   }
@@ -135,8 +128,6 @@ export class FleetLeaseIndex {
     return this.resolve(gatewayLeaseId)?.ownerId;
   }
 
-  /** The fleet-level requester a gateway lease is attributed to -- `roles.ts`'s
-   * `AuthorizeContext.leaseRequesterId`, for `device.exec`'s admin-vs-agent gate. */
   leaseRequesterId(gatewayLeaseId: string): string | undefined {
     return this.resolve(gatewayLeaseId)?.requesterId;
   }
@@ -176,7 +167,7 @@ export class FleetLeaseIndex {
   }
 
   /**
-   * Records a lease this gateway just granted. Idempotent by `gatewayLeaseId` for one worker:
+   * why: Records a lease this gateway just granted. Idempotent by `gatewayLeaseId` for one worker:
    * granting twice under the same id (it never happens outside a test) replaces rather than
    * duplicates. A bare id (ADR 0020) belongs to the worker that first held it: another worker's
    * entry under it is not added, and `false` says so.
@@ -194,7 +185,6 @@ export class FleetLeaseIndex {
     return true;
   }
 
-  /** Forgets one lease by its gateway id -- the gateway's own `lease.release` completing. */
   remove(gatewayLeaseId: string): FleetLeaseEntry | undefined {
     const entry = this.#byGatewayId.get(gatewayLeaseId);
     // why: the worker's `lease.released` event travels the uplink before the RPC reply, so the
@@ -206,7 +196,7 @@ export class FleetLeaseIndex {
   }
 
   /**
-   * Finds and forgets a lease by the `(workerId, workerLeaseId)` pair a relayed worker event
+   * why: Finds and forgets a lease by the `(workerId, workerLeaseId)` pair a relayed worker event
    * carries (`lease.expired`/`lease.released`, republished with `workerId` added). Atomic --
    * look up and remove in one call -- so `GatewayOwnerRoutedFacts` can resolve the fleet
    * `ownerId`/gateway lease id for its translated push *before* the entry is gone, with no
@@ -223,7 +213,7 @@ export class FleetLeaseIndex {
   }
 
   /**
-   * Adds every gateway-issued lease a worker's current view reports that this index does not
+   * why: Adds every gateway-issued lease a worker's current view reports that this index does not
    * already know (ADR §30's reconnect rebuild; also the ordinary per-refresh path, since
    * `WorkerView.leases` is always the worker's complete current set, not a delta). Recognizes
    * "gateway-issued" by `requesterId`'s prefix (§14) -- a worker's own local lease never carries
@@ -260,9 +250,6 @@ export class FleetLeaseIndex {
     this.#reconcileMissing(workerId, generation, reported);
   }
 
-  /** `rebuildFromWorker`'s addition half: adds every gateway-issued lease this snapshot reports
-   * that the index does not already know, and returns the full set of gateway ids it saw (used
-   * to know which of this worker's *existing* entries this snapshot did not mention). */
   #addReported(
     workerId: string,
     leases: readonly WorkerReportedLease[],
@@ -274,7 +261,7 @@ export class FleetLeaseIndex {
       const gatewayLeaseId = this.#gatewayLeaseId(workerId, lease);
       const existing = this.#byGatewayId.get(gatewayLeaseId);
       if (existing !== undefined && existing.workerId !== workerId) {
-        // ADR 0020: two workers hold the same caller-chosen id. The first reported keeps it; this
+        // why: ADR 0020: two workers hold the same caller-chosen id. The first reported keeps it; this
         // lease is not routed and expires at its TTL. Not counted as a report from this worker's
         // entry, because it is not one, so it never resets the first entry's missing count.
         this.logger.warn(
@@ -286,7 +273,7 @@ export class FleetLeaseIndex {
       reported.add(gatewayLeaseId);
       this.#missingSince.delete(gatewayLeaseId);
       if (existing !== undefined || this.#endedByWorkerAnswer.has(gatewayLeaseId)) continue;
-      // C1 (round 2 review): this id was forgotten moments ago by the worker's own relayed
+      // why: C1 (round 2 review): this id was forgotten moments ago by the worker's own relayed
       // `lease.expired`/`lease.released` -- reappearing in a snapshot now means that snapshot
       // was gathered before the relayed fact landed and is only completing late (see
       // `#removedByEvent`'s own doc). Logged, not skipped: the worker is the source of truth for
@@ -317,7 +304,7 @@ export class FleetLeaseIndex {
   }
 
   /**
-   * The id a reported lease is routed under (ADR 0020): bare when the requester chose it and it
+   * why: The id a reported lease is routed under (ADR 0020): bare when the requester chose it and it
    * is a valid chosen id, `<workerId>.<id>` otherwise. A lease flagged as chosen whose id could
    * not have been chosen is prefixed and logged: the worker's claim is not trusted past the
    * pattern a requester's id must match (safety rule 10).
@@ -334,9 +321,6 @@ export class FleetLeaseIndex {
     return `${workerId}.${lease.id}`;
   }
 
-  /** `rebuildFromWorker`'s removal half: forgets an existing entry for `workerId` that this
-   * snapshot did not report, but only once it has failed to appear in *two* consecutive
-   * snapshots (see `#missingSince`'s own doc comment for why one miss is not enough). */
   #reconcileMissing(workerId: string, generation: number, reported: ReadonlySet<string>): void {
     for (const entry of this.all()) {
       if (entry.workerId !== workerId || reported.has(entry.gatewayLeaseId)) continue;
@@ -349,7 +333,7 @@ export class FleetLeaseIndex {
     }
   }
 
-  /** Drops every entry attributed to a worker the gateway has forgotten entirely (its view was
+  /** why: Drops every entry attributed to a worker the gateway has forgotten entirely (its view was
    * removed -- `worker.remove`, or retention). A worker's view carrying no leases is not this:
    * that is the ordinary release/expiry path above. Also drops that worker's own `#generation`
    * counter (`#forget`, above, already clears each entry's own `#missingSince`) -- a worker id
@@ -362,8 +346,6 @@ export class FleetLeaseIndex {
     this.#generation.delete(workerId);
   }
 
-  /** Projects a worker-reported lease for a fleet client: rewritten when this index recognizes
-   * it (by `(workerId, lease.id)`), passed through with only `workerId` added otherwise. */
   project<Lease extends { readonly id: string; readonly requesterId: string }>(
     lease: Lease,
     workerId: string,

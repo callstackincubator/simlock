@@ -1,5 +1,5 @@
 /**
- * ADR 0010 §7: a gateway installs a component on its workers by asking each one, at the same
+ * why: ADR 0010 §7: a gateway installs a component on its workers by asking each one, at the same
  * time, with the worker's own `component.install`. The gateway decides nothing a worker decides
  * (architecture rule 10): no policy, no disk check, no join. Each worker answers for itself, and
  * this module turns those answers into one result per worker.
@@ -39,7 +39,7 @@ type WorkerInstallResult = RelayOutput["results"][number];
 const resultSchema = OPERATIONS["worker.install-component"].output.shape.results.element;
 
 /**
- * What the gateway adds to a worker's own `downloads.timeoutMs` before it stops waiting for that
+ * why: What the gateway adds to a worker's own `downloads.timeoutMs` before it stops waiting for that
  * worker's answer. The worker's budget is the limit; this is only a backstop for a worker that
  * never answers at all (ADR 0010 §7).
  */
@@ -52,14 +52,10 @@ export interface ComponentRelayOptions {
 }
 
 export interface ComponentRelayHooks {
-  /** Called once, after every target is resolved and before any worker is asked. A refusal of
-   * the whole call (`UNKNOWN_WORKER`, `WORKER_UNREACHABLE`) comes before it. */
   readonly onAsking?: (() => void) | undefined;
-  /** Each worker's progress, with that worker's id, while its call is still open. */
   readonly onProgress?: ((progress: ComponentProgress, workerId: string) => void) | undefined;
 }
 
-/** A worker the relay will ask, with the budget its backstop is measured against. */
 interface Target {
   readonly view: WorkerView;
   readonly link: WorkerDispatchTarget;
@@ -67,10 +63,6 @@ interface Target {
   readonly timeoutMs: number;
 }
 
-/**
- * Asks every targeted worker to install `input.version` of `input.platform`, and answers with
- * one result per worker in ascending worker id once every target has one.
- */
 export async function relayComponentInstall(
   options: ComponentRelayOptions,
   input: RelayInput,
@@ -88,11 +80,6 @@ export async function relayComponentInstall(
   };
 }
 
-/**
- * `"all"`: every known worker that can be asked is a target, and every other one is `skipped`.
- * Named ids: an unknown one fails the call with `UNKNOWN_WORKER`, and one that cannot be asked
- * fails it with `WORKER_UNREACHABLE`, both before any worker is asked.
- */
 function resolveTargets(
   options: ComponentRelayOptions,
   workers: RelayInput["workers"],
@@ -128,7 +115,7 @@ function resolveTargets(
 }
 
 /**
- * The one answer to "can this worker be asked": its uplink is open and compatible, and its config
+ * why: The one answer to "can this worker be asked": its uplink is open and compatible, and its config
  * has been read, which is where its own `downloads.timeoutMs` comes from. A drained worker can be:
  * draining stops new leases, not maintenance. The reason it cannot be asked, otherwise.
  */
@@ -149,7 +136,7 @@ function askable(directory: WorkerDirectory, view: WorkerView): Target | string 
 }
 
 /**
- * One worker's call. The backstop is that worker's own `downloads.timeoutMs` plus a minute,
+ * why: One worker's call. The backstop is that worker's own `downloads.timeoutMs` plus a minute,
  * measured from the send and never restarted (architecture rule 11). After an `installed`
  * answer the worker's view is refreshed with its catalog before the result counts, so the fleet
  * catalog lists the component by the time the relay answers -- unless that refresh failed or
@@ -178,7 +165,7 @@ async function askWorker(
       );
     });
     const onProgress = hooks.onProgress;
-    // Sent at once; the async wrapper only turns a synchronous throw into a rejection, so every
+    // why: Sent at once; the async wrapper only turns a synchronous throw into a rejection, so every
     // way the call ends goes through `finish`.
     const call = (async () =>
       target.client.installComponent(
@@ -222,7 +209,7 @@ function fromError(view: WorkerView, error: unknown): WorkerInstallResult {
   return bounded(view, result(view, "failed", { code: "INTERNAL", message }));
 }
 
-/** A worker's answer is a claim (safety rule 10): its message is cut to the contract's bound,
+/** why: A worker's answer is a claim (safety rule 10): its message is cut to the contract's bound,
  * and an answer that still does not fit the contract is `failed` rather than relayed. */
 function bounded(view: WorkerView, value: WorkerInstallResult): WorkerInstallResult {
   const cut =

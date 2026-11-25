@@ -69,7 +69,6 @@ export class StateDrainStore implements DrainStore {
   }
 }
 
-/** For tests and for a gateway with nowhere to write: remembers nothing across a restart. */
 export class MemoryDrainStore implements DrainStore {
   #drained: readonly string[] = [];
 

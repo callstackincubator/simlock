@@ -7,7 +7,7 @@ import { GatewayOwnerRoutedFacts, type OwnerRoutedFact } from "./owner-routed-fa
 
 const PREFIX = "gw:instance-1:";
 
-/** `WorkerLink#onWorkerEvent`'s own relay shape: the worker's real event, with `workerId` added.
+/** why: `WorkerLink#onWorkerEvent`'s own relay shape: the worker's real event, with `workerId` added.
  * H11 (round 2 review): the payload's own `ownerId` is *not* generally "the gateway's own uplink
  * principal, never a fleet client's" -- for a gateway-issued lease the worker stores the real
  * fleet owner verbatim (ADR §27a) and echoes it back honestly in the ordinary case. The reason
@@ -50,7 +50,7 @@ describe("GatewayOwnerRoutedFacts", () => {
     const [event, payload] = relay("lease.expired", {
       deviceId: "dev_1",
       leaseId: "lse_alice",
-      // The relayed payload's own `ownerId` -- one thing a worker could echo back that is
+      // why: The relayed payload's own `ownerId` -- one thing a worker could echo back that is
       // definitely wrong for this lease (it names the gateway's own uplink principal, not
       // Alice). A correct implementation never reads this field at all; it resolves `ownerId`
       // from the index instead, regardless of what the payload happens to say.
@@ -68,20 +68,13 @@ describe("GatewayOwnerRoutedFacts", () => {
         type: "lease-lost",
       },
     ]);
-    // Bob's own lease is untouched by Alice's expiry -- a session comparing its principal against
-    // this one fact's `ownerId` ("alice-principal") would never match Bob's, and no second fact
-    // was emitted for him at all.
     expect(leaseIndex.resolve("wrk_1.lse_bob")).toBeDefined();
-    // Alice's own entry is now gone: the lease actually ended, so a subsequent renew/release/exec
-    // against it correctly finds nothing.
     expect(leaseIndex.resolve("wrk_1.lse_alice")).toBeUndefined();
   });
 
   it("emits nothing for a worker's own local lease -- one this gateway never issued and has no fact to relay for", () => {
     const eventBus = new EventBus(new FakeClock(1_000));
     const leaseIndex = new FleetLeaseIndex(PREFIX);
-    // The index knows nothing about "lse_local" -- exactly the case for a lease a local agent on
-    // the worker holds, which this gateway never forwarded.
     const facts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
     const received: OwnerRoutedFact[] = [];
     facts.subscribe((fact) => received.push(fact));
@@ -136,10 +129,6 @@ describe("GatewayOwnerRoutedFacts", () => {
     expect(leaseIndex.resolve("wrk_1.lse_alice")).toBeDefined();
   });
 
-  // H10 (round 2 review): the suite's own title used to claim this branch too ("device-unhealthy/
-  // device-recovered the same way"), but only ever emitted device.crash-detected -- the
-  // device-recovered branch (own-routed-facts.ts's "device.recovered" subscription) was correct
-  // by inspection but never actually exercised.
   it("resolves device-recovered the same way, without removing the lease (it is still active)", () => {
     const eventBus = new EventBus(new FakeClock(1_000));
     const leaseIndex = new FleetLeaseIndex(PREFIX);

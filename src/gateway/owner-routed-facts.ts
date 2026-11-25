@@ -1,5 +1,5 @@
 /**
- * `GatewayOwnerRoutedFacts`: the gateway's own `OwnerRoutedFacts` (`src/daemon/owner-routed-facts.ts`),
+ * why: `GatewayOwnerRoutedFacts`: the gateway's own `OwnerRoutedFacts` (`src/daemon/owner-routed-facts.ts`),
  * replacing `inertOwnerRoutedFacts()` once #118 gives the gateway leases of its own to report
  * facts about.
  *
@@ -28,7 +28,7 @@ import type { EventBus } from "../bus/index.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 
 /**
- * Structurally identical to `src/daemon/owner-routed-facts.ts`'s own `OwnerRoutedFact`/
+ * why: Structurally identical to `src/daemon/owner-routed-facts.ts`'s own `OwnerRoutedFact`/
  * `OwnerRoutedFacts` -- declared again here, rather than imported, because ADR 0005 §33 allows
  * `src/gateway` exactly one `src/daemon` import (`daemon/dispatch.js`, enforced by
  * `pnpm lint`) and this shape does not need to be the second one: `DaemonServer` accepts
@@ -61,7 +61,7 @@ export interface OwnerRoutedFacts {
   subscribe(listener: (fact: OwnerRoutedFact) => void): () => void;
 }
 
-/** The fields this class reads off a relayed event's payload -- deliberately not `EventMap`'s
+/** why: The fields this class reads off a relayed event's payload -- deliberately not `EventMap`'s
  * own declared shape, which knows nothing about `workerId` (added only by the relay, at the
  * bus-agnostic edge `WorkerLink#onWorkerEvent` owns). */
 interface RelayedLeaseEvent {
