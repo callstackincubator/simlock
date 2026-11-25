@@ -23,10 +23,12 @@ agent-device close
 
 | Where | Needs |
 | --- | --- |
-| Each worker | agent-device 0.21.28 or later, runnable by the user who runs the Simlock daemon. Simlock never installs or updates it. |
+| Each worker | agent-device 0.21.28 through 0.21.39, runnable by the user who runs the Simlock daemon. Simlock never installs or updates it. |
 | Each worker | HTTP on. A standalone worker has it on by default. |
-| Each agent's machine | agent-device 0.21.28 or later. |
+| Each agent's machine | agent-device 0.21.28 through 0.21.39. |
 | Each agent | Its own agent token, unless it runs on the worker's own Mac ([On the same Mac](#on-the-same-mac)). |
+
+agent-device 0.21.40 and later are not supported yet ([#1800](https://github.com/callstackincubator/simlock/issues/1800)).
 
 For agents on other machines, the worker or gateway must be reachable over HTTPS. Simlock does not serve HTTPS itself; see [Turn on the web console and HTTP](/simlock/docs/worker/console-and-http).
 
@@ -253,6 +255,7 @@ Sign-in errors (`UNAUTHENTICATED`, `FORBIDDEN`) and errors from outside Simlock,
 | `refused by simlock: No worker in the fleet can currently serve this request` | Every worker that serves agent-device is drained. Ask the operator to bring one back, or wait. |
 | `agent-device is not available on this simlock: <reason>` | agent-device is missing, too old, starting or crashed on the worker. Ask the operator. |
 | `agent-device is not available on this simlock: phone daemon: <message>` | Phone support on the worker is starting or down. Simulator leases keep working. |
+| `Remote daemon RPC protocol is incompatible` | The agent's agent-device is 0.21.40 or later, which Simlock does not support yet. Install 0.21.39. |
 | `INPUT_UNAVAILABLE` message from `orientation` | Simlock could not send the rotation. Retry. |
 
 Every `capabilities.agent-device.*` key: [Configuration reference](/simlock/docs/reference/configuration#optional-modules).
