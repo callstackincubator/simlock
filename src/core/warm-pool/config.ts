@@ -32,7 +32,7 @@ export interface WarmTarget {
 export const DEFAULT_BASELINE_LEARN_AFTER = 3;
 
 /** why: one round minute covers the lessee's install and first app start after a grant, when `warmPool.refillDelayMs` is not set. */
-export const DEFAULT_REFILL_DELAY_MS = 60_000;
+const DEFAULT_REFILL_DELAY_MS = 60_000;
 
 /** The warm pool's operator-facing settings, the `warmPool` keys beside `quarantine`. */
 export interface WarmPoolConfig {
