@@ -70,6 +70,7 @@ function config(options: HarnessOptions): TestEngineConfig {
     warmPool: {
       enabled: false,
       maxConcurrentBoots: 1,
+      refillDelayMs: 0,
       reserveRunning: { android: 0, ios: 0 },
       targets: [],
       quarantine: {

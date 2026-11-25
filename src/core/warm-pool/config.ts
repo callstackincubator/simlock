@@ -44,6 +44,8 @@ export interface WarmPoolConfig {
   readonly baselineLearnAfter?: number;
   /** why: the most boots and creations in flight at once: the pool's own, for waiters and targets, and each waiting request's own. */
   readonly maxConcurrentBoots: number;
+  /** why: the wait after a simulator or emulator grant before the pool refills; `0` refills at once. */
+  readonly refillDelayMs: number;
 }
 
 export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig {
@@ -52,6 +54,7 @@ export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig 
     enabled: true,
     learn: true,
     maxConcurrentBoots: Math.max(1, Math.floor(systemStats.cpuCount() / 4)),
+    refillDelayMs: 0,
     reserveRunning: { android: 0, ios: 0 },
     targets: [],
   };
@@ -119,6 +122,7 @@ export const warmPoolConfigValidator: Readonly<Record<keyof WarmPoolConfig, Vali
   enabled: booleanValue,
   learn: booleanValue,
   maxConcurrentBoots: positiveInteger,
+  refillDelayMs: (value) => value as number,
   reserveRunning: objectValidator({ android: nonNegativeInteger, ios: nonNegativeInteger }),
   targets: targetsValidator,
 };

@@ -63,6 +63,7 @@ function config(maxDevices = 1, maxRunning = 1): Pick<Config, "capacity" | "warm
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
+      refillDelayMs: 0,
       reserveRunning: { android: 0, ios: 0 },
       targets: [],
       quarantine: {
