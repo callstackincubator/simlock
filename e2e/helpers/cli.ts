@@ -22,16 +22,10 @@ export interface CliResult {
   readonly code: number | null;
   readonly stdout: string;
   readonly stderr: string;
-  /** Parsed stdout, when it is exactly one line of JSON (most commands' success output). */
   readonly json: unknown;
-  /** Parsed `{"error":{code,message}}` stderr line -- the CLI's documented failure contract. */
   readonly error: CliError | undefined;
 }
 
-/**
- * Runs one `simlock` CLI invocation to completion. Exit-code and structured-error
- * assertions read as one-liners: `expect((await cli(env, [...])).code).toBe(13)`.
- */
 export function cli(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
@@ -74,11 +68,8 @@ export function cli(
 }
 
 export interface CliBackgroundHandle {
-  /** Resolves with the first stdout line -- the lease grant JSON in held mode. */
   firstStdoutLine(timeout?: number): Promise<string>;
-  /** The stderr progress JSON lines observed so far, in order. */
   progressEvents(): readonly unknown[];
-  /** Everything written to stdout so far, for a process that streams until it is stopped. */
   stdoutSoFar(): string;
   stderrSoFar(): string;
   waitForExit(timeout?: number): Promise<CliResult>;
@@ -114,19 +105,17 @@ export function cliBackground(
       if (line.trim() === "") continue;
       try {
         progress.push(JSON.parse(line));
-      } catch {
-        // Non-JSON stderr noise is preserved in `stderr` but not treated as progress.
-      }
+      } catch {}
     }
   });
 
-  // Subscribed at spawn time, not lazily on the first waitForExit(): a process that
+  // why: Subscribed at spawn time, not lazily on the first waitForExit(): a process that
   // ends on its own -- a held `lease` whose lease the daemon took back, say -- can
   // emit "close" while the test is still asserting on its output, and a listener
   // attached after the fact never fires. That would time out as "process never
   // exited" when it had in fact already exited.
   const exited = new Promise<CliResult>((resolve) => {
-    // A process that dies before printing would otherwise surface only as a timeout, a minute
+    // why: A process that dies before printing would otherwise surface only as a timeout, a minute
     // later and without its stderr. "close", not "exit": it comes after the last stdout chunk,
     // so a line printed just before exiting has already been seen and its waiters resolved. A
     // failed spawn emits "close" too.
@@ -186,7 +175,7 @@ function parseOutputs(
   stderr: string,
 ): { json: unknown; error: CliError | undefined } {
   const json = parseSoleJsonLine(stdout);
-  // A failing command's stderr is documented to carry exactly one structured error
+  // why: A failing command's stderr is documented to carry exactly one structured error
   // line, but a request that got as far as queueing/provisioning first writes
   // progress lines on the same stream -- so search all lines, not just a sole one,
   // and prefer the last match (the final error, after any progress).

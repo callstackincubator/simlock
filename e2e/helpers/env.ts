@@ -41,7 +41,7 @@ const execFileAsync = promisify(execFile);
 const FAKE_DRIVER_MODULE = join(REPO_ROOT, "dist/e2e/index.js");
 
 /**
- * Envs created by `withDaemon()` during the *currently running* test, torn down by
+ * why: Envs created by `withDaemon()` during the *currently running* test, torn down by
  * the single `afterEach` below.
  *
  * Why a module-level registry instead of each `withDaemon()` call registering its
@@ -77,7 +77,7 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Capacity inputs the fake-driver lane pins so a flow's device budget comes from the
+ * why: Capacity inputs the fake-driver lane pins so a flow's device budget comes from the
  * flow, never from the machine running it. `defaultConfig` derives the per-platform
  * device limits from `availableParallelism()` (a 2-core runner yields exactly one iOS
  * device), and the `resource` capacity strategy independently gates on `totalmem()`
@@ -108,14 +108,7 @@ const FAKE_LANE_BASE_CONFIG: Record<string, unknown> = {
 };
 
 export interface WithDaemonOptions {
-  /**
-   * "running" (default) starts the daemon explicitly before returning, so the
-   * first test action talks to an already-live daemon. "auto" leaves the daemon
-   * unstarted so the test can exercise CLI/MCP auto-start and stale-socket
-   * recovery itself.
-   */
   readonly mode?: "running" | "auto";
-  /** Seeded into config.json before the daemon (if any) starts. */
   readonly configOverrides?: Record<string, unknown>;
   readonly agentId?: string;
   /**
@@ -135,15 +128,13 @@ export interface WithDaemonOptions {
    */
   readonly role?: "gateway";
   /**
-   * Written to the fake driver's script file before the daemon starts, so the daemon's very
+   * why: Written to the fake driver's script file before the daemon starts, so the daemon's very
    * first driver calls already see it. Setting `driverScript` after `withDaemon()` returns is
    * fine for anything the test asks for afterwards, but not for what the daemon read on its own
    * at startup: a worker joining a gateway reports its catalog the moment its uplink opens, and
    * a script written later only reaches the gateway on its 30s periodic refresh.
    */
   readonly driverScript?: FakeDriverScript;
-  /** The platforms the fake registers a driver for; omitted registers both. Only with the fake
-   * driver. A worker without a platform's driver lists no catalog for it. */
   readonly fakeDriverPlatforms?: readonly ("ios" | "android")[];
   /**
    * why: a new home makes each platform's seed again (ADR 0061), 40 to 60 s of a real-driver
@@ -161,7 +152,7 @@ export interface TestEnv {
   readonly home: string;
   readonly dataDirectory: string;
   /**
-   * The port this env's Simlock runs its own adb server on, in the real-SDK lane. A TCP
+   * why: The port this env's Simlock runs its own adb server on, in the real-SDK lane. A TCP
    * port is machine-global, so `SIMLOCK_HOME` alone no longer isolates two Simlocks and a
    * test that shares one with the developer's own daemon would fail closed on `occupied`.
    * `undefined` in the fake-driver lane, which has no adb server at all.
@@ -170,7 +161,6 @@ export interface TestEnv {
   readonly socketPath: string;
   readonly logPath: string;
   readonly configPath: string;
-  /** Environment to pass to any spawned simlock process (CLI, MCP, or the daemon). */
   readonly env: NodeJS.ProcessEnv;
   readonly driverScript: DriverScriptControl;
   readonly driverLog: DriverLogControl;
@@ -182,29 +172,12 @@ export interface TestEnv {
     names: readonly string[],
     options?: { readonly since?: string; readonly timeout?: number },
   ): Promise<RecordedEvent[]>;
-  /** Starts the daemon explicitly (`simlock daemon start`); a no-op if already running. */
   startDaemon(): Promise<CliResult>;
-  /** Stops the daemon gracefully (`simlock daemon stop`), then restarts it explicitly. */
   restartDaemon(): Promise<void>;
-  /** Sends the given signal directly to the daemon process (default SIGKILL), for
-   *  stale-socket-recovery and orphan-sweep tests. Resolves once the process is gone. */
   killDaemon(signal?: NodeJS.Signals): Promise<void>;
-  /** Writes config.json keys, restarts the daemon, runs `fn`, then restores the
-   *  original config.json and restarts again. */
   withConfig<T>(overrides: Record<string, unknown>, fn: () => Promise<T>): Promise<T>;
 }
 
-/**
- * Allocates an isolated `SIMLOCK_HOME`, wires the fake driver in, and returns a
- * `TestEnv`. Registers itself with the module-level `activeEnvs` registry so the one
- * real `afterEach` above tears it down at the end of the current test: kills any
- * backgrounded CLI/MCP processes this env spawned, gracefully stops the daemon, then
- * verifies the pids that were observed holding the socket before that stop actually
- * exited (not just that the socket file is gone -- see `isProcessAlive`),
- * force-killing and failing the test if any survived. It does not independently
- * assert lease/device state is clean on exit; a flow that cares about that asserts
- * it itself (e.g. `waitForLeaseCount(env, 0)`).
- */
 export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestEnv> {
   const { testEnv, state } = await buildEnv(options);
   activeEnvs.add(state);
@@ -319,7 +292,7 @@ async function buildEnv(
       return started;
     },
     async restartDaemon() {
-      // Wait for the *process* to actually exit, not just its socket file to
+      // why: Wait for the *process* to actually exit, not just its socket file to
       // disappear -- `daemon.stop()` unlinks the socket as part of shutdown, which
       // can land slightly before the process fully drains its event loop. Starting
       // a new daemon while the old one is still mid-exit leaks daemon processes.
@@ -329,7 +302,7 @@ async function buildEnv(
         timeout: 10_000,
         label: "daemon socket removed",
       });
-      // Best-effort: under heavy system load a still-exiting process can
+      // why: Best-effort: under heavy system load a still-exiting process can
       // legitimately take a while. This only reduces the ordinary-case race, so a
       // timeout here must not abort the restart itself.
       await waitFor(
@@ -346,9 +319,7 @@ async function buildEnv(
       for (const pid of pids) {
         try {
           process.kill(pid, signal);
-        } catch {
-          // Already gone.
-        }
+        } catch {}
       }
       await waitFor(async () => (await pidsHoldingSocket(socketPath)).length === 0, {
         timeout: 10_000,
@@ -569,7 +540,7 @@ interface TeardownState {
   readonly logName: string;
   readonly mcpClients: ReadonlySet<McpClientHandle>;
   /**
-   * The real-SDK lane: the home may hold a real iOS device set, which must be emptied before
+   * why: The real-SDK lane: the home may hold a real iOS device set, which must be emptied before
    * the home is removed. An Android-only or non-macOS run has none; emptying it is a no-op.
    */
   readonly realDrivers: boolean;
@@ -659,7 +630,7 @@ async function stopDaemonForTeardown(
   env: NodeJS.ProcessEnv,
   gatewayFlag: readonly string[],
 ): Promise<DaemonStopResult> {
-  // Capture who (if anyone) is holding the socket *before* the graceful stop, so
+  // why: Capture who (if anyone) is holding the socket *before* the graceful stop, so
   // we can verify those specific pids actually exit -- checking only "is the
   // socket file still there" after `daemon stop` would miss a process that
   // unlinked its socket on the way out but never actually terminated.
@@ -721,7 +692,7 @@ async function killAndVerifyDaemonPids(
   socketPath: string,
   pidsBeforeStop: readonly number[],
 ): Promise<number[]> {
-  // A process can keep running for a little while after its socket is unlinked
+  // why: A process can keep running for a little while after its socket is unlinked
   // (event-loop drain, especially under load) -- give `pidsBeforeStop` a real grace
   // window rather than a single point-in-time check, so a merely-slow exit is not
   // mistaken for a genuine leak.
@@ -749,9 +720,7 @@ async function killAndVerifyDaemonPids(
   for (const pid of strayPids) {
     try {
       process.kill(pid, "SIGKILL");
-    } catch {
-      // Already gone.
-    }
+    } catch {}
   }
   await waitFor(
     async () => !(await Promise.all(strayPids.map((pid) => isProcessAlive(pid)))).some(Boolean),
@@ -791,11 +760,6 @@ async function killLeftoverAgentDevice(
   }
 }
 
-/**
- * Signal-0 liveness probe: sends no actual signal, just asks the kernel whether
- * `pid` exists and is ours to signal. Throws ESRCH (gone) or EPERM (exists, not
- * ours -- treated as alive since it did not exit) otherwise.
- */
 async function isProcessAlive(pid: number): Promise<boolean> {
   try {
     process.kill(pid, 0);
@@ -805,7 +769,6 @@ async function isProcessAlive(pid: number): Promise<boolean> {
   }
 }
 
-/** Finds pids with an open file descriptor on `socketPath` (macOS/Linux via lsof). */
 async function pidsHoldingSocket(socketPath: string): Promise<number[]> {
   if (!existsSync(socketPath)) return [];
   try {

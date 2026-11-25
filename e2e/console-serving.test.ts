@@ -2,12 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 
-/**
- * The daemon serves the built web console at `/` whenever HTTP is enabled, at the address
- * `simlock status` prints. What the page does in a browser is the browser lane's
- * (`pnpm test:console`); this proves the real build is served by the real daemon in both modes.
- */
-
 async function consoleUrl(env: TestEnv): Promise<string | undefined> {
   const status = await env.cli(["status", "--json"]);
   expect(status.code).toBe(0);
@@ -47,7 +41,6 @@ describe("the web console", () => {
     expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
     const html = await page.text();
     expect(html).toContain('<div id="root"></div>');
-    // The built page loads its script from the daemon itself, with no token.
     const script = /src="(\/assets\/[^"]+\.js)"/.exec(html)?.[1];
     expect(script).toBeDefined();
     const asset = await fetch(new URL(script ?? "", url));

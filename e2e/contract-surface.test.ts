@@ -7,7 +7,7 @@ import { withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
 /**
- * The contract's own surface, checked against a daemon that is actually running.
+ * why: The contract's own surface, checked against a daemon that is actually running.
  *
  * Every other flow in this suite drives one feature through the CLI. This one asks a
  * different question: is each operation the contract *declares* reachable at all? Nothing
@@ -24,7 +24,7 @@ import type { TestEnv } from "./helpers/env.js";
  */
 describe("contract surface", () => {
   /**
-   * Deliberately excluded, not forgotten. `daemon.stop` is ADR §6's frozen exception:
+   * why: Deliberately excluded, not forgotten. `daemon.stop` is ADR §6's frozen exception:
    * `DaemonServer#dispatchLine` intercepts it ahead of the protocol-version and `#stopping`
    * gates, so it never reaches the switch this sweep is probing -- and probing it would
    * stop the daemon out from under the rest of the sweep.
@@ -32,7 +32,7 @@ describe("contract surface", () => {
   const INTERCEPTED: ReadonlySet<string> = new Set(["daemon.stop"]);
 
   /**
-   * A payload no operation's input schema can accept: every one of them is a `z.object`,
+   * why: A payload no operation's input schema can accept: every one of them is a `z.object`,
    * and a bare string is not an object.
    *
    * Probing with an *invalid* payload is what makes this sweep safe to run against every
@@ -45,20 +45,18 @@ describe("contract surface", () => {
    */
   const UNPARSEABLE_PAYLOAD = "not-an-object";
 
-  /** Every operation this sweep probes: the registry minus the one the transport intercepts. */
   function probedOperations(): OperationName[] {
     const probed = Object.keys(OPERATIONS).filter(
       (name) => !INTERCEPTED.has(name),
     ) as OperationName[];
-    // Guards the guard: if `INTERCEPTED` ever swallowed the registry, a sweep would pass by
+    // why: Guards the guard: if `INTERCEPTED` ever swallowed the registry, a sweep would pass by
     // doing nothing at all.
     expect(probed.length).toBeGreaterThan(15);
     return probed;
   }
 
-  /** The code each operation answers an unparseable payload with, keyed by operation. */
   async function sweep(env: TestEnv): Promise<Record<string, string>> {
-    // The real client transport, not a hand-rolled one: `SimlockWire.call` takes the
+    // why: The real client transport, not a hand-rolled one: `SimlockWire.call` takes the
     // operation name as a plain string, which is exactly what a sweep over the registry
     // needs and what the typed `SimlockClient` facade deliberately does not expose.
     const wire = new SimlockWire(await new NodeIpcTransport().connect(env.socketPath));
@@ -85,14 +83,13 @@ describe("contract surface", () => {
 
   it("answers every operation it declares, rather than falling through to UNKNOWN_REQUEST", async () => {
     const env = await withDaemon();
-    // The sweep talks to the daemon directly, so nothing here would start one implicitly the
+    // why: The sweep talks to the daemon directly, so nothing here would start one implicitly the
     // way `env.cli` does.
     expect((await env.startDaemon()).code).toBe(0);
-    // ADR 0010 §6's operation is part of the sweep, not left to the registry walk alone.
     expect(probedOperations()).toContain("component.install");
     expect(probedOperations()).toContain("seed.make");
 
-    // Asserted as one object rather than per operation so a failure names every unreachable
+    // why: Asserted as one object rather than per operation so a failure names every unreachable
     // operation at once, instead of stopping at the first. The `worker.*` operations are
     // included: a worker answers them as a fleet of one (ADR 0012), so they parse their input
     // here too, even the ones it then refuses with `UNSUPPORTED_IN_WORKER_MODE`.
@@ -102,7 +99,7 @@ describe("contract surface", () => {
   });
 
   it("answers every operation on a gateway too, including the ones it refuses", async () => {
-    // ADR 0005 §32: the gateway is a second implementation of the same contract, reached
+    // why: ADR 0005 §32: the gateway is a second implementation of the same contract, reached
     // through the same socket switch -- so it needs the same sweep. Every operation must parse
     // its input before deciding anything, so even the ones a gateway answers
     // `UNSUPPORTED_IN_GATEWAY_MODE` reject an unparseable payload with `BAD_REQUEST` first.
@@ -120,7 +117,7 @@ describe("contract surface", () => {
   });
 
   /**
-   * The other half: `UNKNOWN_REQUEST` still has to be what an *undeclared* operation gets.
+   * why: The other half: `UNKNOWN_REQUEST` still has to be what an *undeclared* operation gets.
    * Without this, the assertion above could be satisfied by a daemon that had stopped
    * rejecting anything -- and a client asking for an operation its newer version knows
    * about needs that code to tell "your daemon is older than you" from "you sent junk".

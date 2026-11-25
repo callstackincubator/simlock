@@ -9,7 +9,6 @@ export interface RecordedEvent {
   readonly module: string;
 }
 
-/** Replays the business-event history via `simlock events --since`, parsed. */
 export async function events(
   env: NodeJS.ProcessEnv,
   since = "1h",
@@ -30,12 +29,6 @@ export async function events(
     .map((line) => JSON.parse(line) as RecordedEvent);
 }
 
-/**
- * Asserts that `expectedNames` appear, in order, as a (not necessarily contiguous)
- * subsequence of the recorded event names -- this is what "the documented sequence"
- * checks in the flows mean: the daemon did these things in this order, extra events
- * from unrelated activity are fine.
- */
 export async function expectEvents(
   env: NodeJS.ProcessEnv,
   expectedNames: readonly string[],

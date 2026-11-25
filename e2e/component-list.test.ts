@@ -45,7 +45,6 @@ describe("simlock component list", () => {
     const env = await withDaemon();
     await env.driverScript.set({ ios: { availableOsVersions: ["18.4"] } });
 
-    // A credential the daemon rejects falls back to an agent session (with a notice).
     const listed = await env.cli([
       "--token",
       "not-an-admin-credential",

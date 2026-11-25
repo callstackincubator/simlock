@@ -1,4 +1,4 @@
-// Hand-declared rather than imported from src/core/driver.ts, to keep this file free of
+// why: Hand-declared rather than imported from src/core/driver.ts, to keep this file free of
 // value-level coupling to the src tree and to show the JSON script format at a glance.
 
 export type FakeDriverPlatform = "ios" | "android";
@@ -84,40 +84,18 @@ export interface ScriptedManagedReality {
 export interface FakeDriverPlatformScript {
   readonly knownModels?: readonly string[];
   readonly availableOsVersions?: readonly string[];
-  /**
-   * The OS versions this fake can slim. A slim request on one of them resolves to a slim spec,
-   * and a prepare boot of a slim-spec device reports `mode: "slim"`. Absent: every request
-   * resolves to a full spec and no boot reports a mode, as a driver that does not slim.
-   */
   readonly slimmableOsVersions?: readonly string[];
-  /**
-   * Makes the slim pass fail: a prepare boot of a slim-spec device reports `mode: "full"`, as
-   * the iOS driver does when it cannot slim a device it planned to. Needs `slimmableOsVersions`.
-   */
   readonly slimPassFails?: boolean;
-  /**
-   * What `listCatalog` reports a model pairs with. A model left out pairs with every available
-   * version, which is also the default for every model.
-   */
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
-  /** What `listCatalog` reports as other names per model; none unless set. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
-  /** The built-in preference lists the driver carries, per class; none unless set. */
   readonly defaultModels?: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
-  /** What `listCatalog` reports as each model's class; empty unless set. */
   readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
-  /** What `listCatalog` reports as custom models; the field is absent unless set. */
   readonly customModels?: readonly string[];
-  /**
-   * What `listCatalog` reports as installed images; the field is absent unless set. A request
-   * naming an image tag resolves only to a runtime listed here with that tag.
-   */
   readonly images?: readonly {
     readonly runtime: string;
     readonly tag: string;
     readonly abi: string;
   }[];
-  /** What `toolVersions` reports for `status.get`'s host facts. None by default. */
   readonly toolVersions?: readonly {
     readonly name: string;
     readonly version: string;
@@ -134,7 +112,7 @@ export interface FakeDriverPlatformScript {
   readonly physicalDevices?: readonly ScriptedPhysicalDevice[];
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
   /**
-   * Overrides the `address` a `makeReady` boot returns (the script is re-read fresh on every
+   * why: Overrides the `address` a `makeReady` boot returns (the script is re-read fresh on every
    * call, so a test can change this between two boots of the same device to simulate the real
    * drivers reassigning it -- e.g. Android's console port on a `shutdown` -> boot cycle).
    * Defaults to `<deviceId>-address`.
@@ -151,7 +129,6 @@ export interface FakeDriverPlatformScript {
   }[];
 }
 
-/** Top-level script file shape, read fresh on every driver operation. */
 export interface FakeDriverScript {
   readonly ios?: FakeDriverPlatformScript;
   readonly android?: FakeDriverPlatformScript;
@@ -166,5 +143,4 @@ export interface FakeDriverLogEntry {
 
 export const DEFAULT_SCRIPT_ENV = "SIMLOCK_FAKE_DRIVER_SCRIPT";
 export const DEFAULT_LOG_ENV = "SIMLOCK_FAKE_DRIVER_LOG";
-/** Comma-separated platforms the fake registers a driver for; unset registers both. */
 export const DEFAULT_PLATFORMS_ENV = "SIMLOCK_FAKE_DRIVER_PLATFORMS";

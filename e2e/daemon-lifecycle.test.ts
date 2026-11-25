@@ -209,7 +209,7 @@ describe("daemon lifecycle & recovery", () => {
     expect(statusJson.code).toBe(0);
     expect(statusJson.json).toMatchObject({ daemon: { health: "running", mode: "worker" } });
 
-    // "daemon start" while already running must not spawn a second daemon: the
+    // why: "daemon start" while already running must not spawn a second daemon: the
     // request-scoped connection each `daemon start` opens transiently would make a
     // pid comparison via lsof racy, so compare content of daemon.log instead --
     // a second daemon process would append its own "Daemon started" record.
@@ -227,10 +227,10 @@ describe("daemon lifecycle & recovery", () => {
     expect(existsSync(env.socketPath)).toBe(true);
 
     await env.killDaemon("SIGKILL");
-    // kill -9 does not unlink the unix socket file -- it should still exist, stale.
+    // why: kill -9 does not unlink the unix socket file -- it should still exist, stale.
     expect(existsSync(env.socketPath)).toBe(true);
 
-    // `daemon status` deliberately never auto-starts (checking status shouldn't have
+    // why: `daemon status` deliberately never auto-starts (checking status shouldn't have
     // the side effect of spawning a daemon) -- any other command does, and is how a
     // real agent would recover from a stale socket left by a crash.
     const catalog = await env.cli(["catalog", "--json"]);
@@ -266,7 +266,7 @@ describe("daemon lifecycle & recovery", () => {
     ]);
     expect(lease.code).toBe(0);
 
-    // A detached lease is deliberately left alone by shutdown -- its liveness is the TTL,
+    // why: A detached lease is deliberately left alone by shutdown -- its liveness is the TTL,
     // not a connection -- and its armed TTL timer used to keep the process alive for the
     // full fifteen minutes after `daemon stop` returned. Teardown's stray-process check is
     // the assertion: it fails the test if the daemon that was told to stop is still there.
