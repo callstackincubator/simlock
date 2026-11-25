@@ -6,6 +6,7 @@ import {
   invalidValue,
   nonEmptyString,
   nonNegativeInteger,
+  nonNegativeNumber,
   objectValidator,
   positiveInteger,
   requireObject,
@@ -30,6 +31,9 @@ export interface WarmTarget {
 /** why: the lease count that learns a baseline kind when `warmPool.baselineLearnAfter` is not set. */
 export const DEFAULT_BASELINE_LEARN_AFTER = 3;
 
+/** why: one round minute covers the lessee's install and first app start after a grant, when `warmPool.refillDelayMs` is not set. */
+const DEFAULT_REFILL_DELAY_MS = 60_000;
+
 /** The warm pool's operator-facing settings, the `warmPool` keys beside `quarantine`. */
 export interface WarmPoolConfig {
   /** `false` keeps nothing warm: every idle running device is shut down. */
@@ -44,6 +48,8 @@ export interface WarmPoolConfig {
   readonly baselineLearnAfter?: number;
   /** why: the most boots and creations in flight at once: the pool's own, for waiters and targets, and each waiting request's own. */
   readonly maxConcurrentBoots: number;
+  /** why: the wait after a simulator or emulator grant before the pool refills; `0` refills at once. */
+  readonly refillDelayMs: number;
 }
 
 export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig {
@@ -52,6 +58,7 @@ export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig 
     enabled: true,
     learn: true,
     maxConcurrentBoots: Math.max(1, Math.floor(systemStats.cpuCount() / 4)),
+    refillDelayMs: DEFAULT_REFILL_DELAY_MS,
     reserveRunning: { android: 0, ios: 0 },
     targets: [],
   };
@@ -119,6 +126,7 @@ export const warmPoolConfigValidator: Readonly<Record<keyof WarmPoolConfig, Vali
   enabled: booleanValue,
   learn: booleanValue,
   maxConcurrentBoots: positiveInteger,
+  refillDelayMs: nonNegativeNumber,
   reserveRunning: objectValidator({ android: nonNegativeInteger, ios: nonNegativeInteger }),
   targets: targetsValidator,
 };
