@@ -31,6 +31,7 @@ import type { AcceptedUplink, Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import type { GatewayWorkerClient } from "./worker-client.js";
 import type { WorkerGrantedDevice, WorkerRegistry } from "./worker-registry.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * How long the gateway waits for one round trip to a worker before giving up on it.
@@ -584,7 +585,7 @@ export class WorkerLink {
         workerId: this.workerId,
         event: envelope.event,
         eventId: envelope.id,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       });
       return;
     }
@@ -680,10 +681,6 @@ const defaultConnect: WorkerClientFactory = async (connection, principal) =>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** why: real event payloads nest a handful of levels; far below any stack limit, far above real use. */

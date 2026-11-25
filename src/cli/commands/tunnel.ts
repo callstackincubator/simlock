@@ -21,7 +21,8 @@ import {
 import { commandArgs, UsageError } from "../args.js";
 import { escapeControl } from "../escape.js";
 import { selectOnlyLease } from "../remote-lease.js";
-import { checkedFarmUrl, FarmUrlError, farmTokenFits } from "../../simlock-client/farm-url.js";
+import { farmTokenFits } from "../../simlock-client/farm-url.js";
+import { checkedFarmOrigin } from "../connect.js";
 import type { CommandContext } from "../tree.js";
 import type { CliEnvironment } from "../types.js";
 
@@ -107,16 +108,14 @@ function parseTunnels(words: readonly string[]): readonly TunnelSpec[] {
   return specs;
 }
 
-function checkedUrl(text: string | undefined): string {
+async function checkedUrl(
+  text: string | undefined,
+  insecure: Pick<CommandContext, "allowInsecureHttpFlag" | "allowInsecureHttpVariable">,
+): Promise<string> {
   if (text === undefined || text === "") {
     throw new UsageError("No farm URL: pass --url or set SIMLOCK_URL");
   }
-  try {
-    return checkedFarmUrl(text, "--url");
-  } catch (error: unknown) {
-    if (error instanceof FarmUrlError) throw new UsageError(error.message);
-    throw error;
-  }
+  return (await checkedFarmOrigin(text, insecure)).url;
 }
 
 function checkedToken(text: string | undefined): string {
@@ -648,10 +647,8 @@ function serve(
   });
 }
 
-async function run(
-  argv: readonly string[],
-  { environment, token, url }: CommandContext,
-): Promise<number> {
+async function run(argv: readonly string[], context: CommandContext): Promise<number> {
+  const { environment, token, url } = context;
   const { help, lease, positionals } = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
     lease: { type: "string" },
@@ -663,7 +660,7 @@ async function run(
     return 0;
   }
   const parsed = parseTunnels(positionals);
-  const base = checkedUrl(url);
+  const base = await checkedUrl(url, context);
   const secret = checkedToken(token ?? environment.tunnelToken);
   const named = checkedLease(typeof lease === "string" ? lease : undefined);
   const listeners: TcpListener[] = [];

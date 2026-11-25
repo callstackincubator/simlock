@@ -8,7 +8,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 Routing:
 
 - No decision logic and no state beyond the lease it holds (architecture rule 8).
-- The router loads nothing. The shared files the dependency rule `cli-router-imports-no-component-values` names (`.dependency-cruiser.mjs`) import no component for a value, so `--help` or a usage error loads no command module. `lazy-loading.test.ts` measures what a command loads when it runs.
+- The router loads nothing. The shared files the dependency rule `cli-router-imports-no-component-values` names (`.dependency-cruiser.mjs`) import no component for a value but `agent-identity` and `shared`, which import nothing, so `--help` or a usage error loads no command module. `lazy-loading.test.ts` measures what a command loads when it runs.
 - Nothing runs without a command node: an unmatched word is a usage error before any command module is read.
 - With `--gateway` and no gateway present, a command stops with `GATEWAY_NOT_PRESENT` before it connects; the commands that can run without one are exempt.
 - `CliEnvironment` carries every port and process handle; tests build it with fakes.

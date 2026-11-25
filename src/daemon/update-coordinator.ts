@@ -21,6 +21,7 @@ import {
   type NpmCli,
   type UpdaterLauncher,
 } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface UpdateInput {
   readonly version?: string | undefined;
@@ -78,7 +79,7 @@ const updaterLineSchema = z.union([
 ]);
 
 function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 function parseUpdaterLine(line: string): z.infer<typeof updaterLineSchema> | undefined {

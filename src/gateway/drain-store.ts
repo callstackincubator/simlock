@@ -10,6 +10,7 @@
  */
 import type { Logger, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import { inTransaction, NoopLogger } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface DrainStore {
   load(): Promise<readonly string[]>;
@@ -46,7 +47,7 @@ export class StateDrainStore implements DrainStore {
       return rows.map((row) => String(row["worker_id"]));
     } catch (error: unknown) {
       this.#logger.error("Could not read the gateway's worker registry; drains are forgotten", {
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
       return [];
     }
@@ -62,7 +63,7 @@ export class StateDrainStore implements DrainStore {
       });
     } catch (error: unknown) {
       this.#logger.error("Could not persist the gateway's worker registry", {
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage(error),
       });
     }
   }

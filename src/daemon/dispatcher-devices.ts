@@ -10,6 +10,7 @@ import {
 import { DispatchError } from "./dispatch.js";
 import type { DispatcherOptions, Handler } from "./dispatcher-options.js";
 import { rotationRefusal } from "./rotation-refusal.js";
+import { errorMessage } from "../shared/index.js";
 
 export class DeviceHandlers {
   constructor(private readonly options: DispatcherOptions) {}
@@ -111,7 +112,7 @@ export function describeEnrollmentError(error: unknown): unknown {
 const INPUT_REASON_MAX = 200;
 
 function inputUnavailable(leaseId: string, error: unknown): DispatchError {
-  const text = error instanceof Error ? error.message : String(error);
+  const text = errorMessage(error);
   const reason = text === "" ? "unknown error" : text.slice(0, INPUT_REASON_MAX);
   return new DispatchError(
     "INPUT_UNAVAILABLE",

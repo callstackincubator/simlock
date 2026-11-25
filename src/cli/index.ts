@@ -65,8 +65,18 @@ sends; the CLI reference lists the default resolution order.
 Pass --url <url> anywhere on the command line (or set SIMLOCK_URL and SIMLOCK_TOKEN) to run
 the command on a remote worker or gateway instead of this machine's daemon.
 
+Pass --allow-insecure-http anywhere on the command line (or set SIMLOCK_ALLOW_INSECURE_HTTP=1) to let --url or SIMLOCK_URL use plain http to a host that is not this machine; the token is then sent unencrypted.
+
 Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.
 Pass --local anywhere on the command line to reach this machine's worker even when only a gateway has run here.`;
+
+function isInsecureHttpFlag(arg: string): boolean {
+  if (arg === "--allow-insecure-http") return true;
+  if (arg.startsWith("--allow-insecure-http=")) {
+    throw new UsageError("--allow-insecure-http takes no value");
+  }
+  return false;
+}
 
 function daemonFlagNamed(arg: string): "gateway" | "local" | undefined {
   for (const name of ["gateway", "local"] as const) {
@@ -92,23 +102,39 @@ function takeValueFlag(
   return undefined;
 }
 
+function takeNamedValueFlag(
+  argv: readonly string[],
+  index: number,
+): { readonly name: "token" | "url"; readonly value: string; readonly next: number } | undefined {
+  for (const name of ["token", "url"] as const) {
+    const flag = takeValueFlag(argv, index, name);
+    if (flag !== undefined) return { name, ...flag };
+  }
+  return undefined;
+}
+
 function extractGlobalFlags(argv: readonly string[]): {
   readonly token: string | undefined;
   readonly url: string | undefined;
   readonly daemonFlag: DaemonFlag;
+  readonly allowInsecureHttp: boolean;
   readonly rest: string[];
 } {
   const rest: string[] = [];
   const values: Record<"token" | "url", string | undefined> = { token: undefined, url: undefined };
   let daemonFlag: DaemonFlag;
+  let allowInsecureHttp = false;
   let index = 0;
   while (index < argv.length) {
-    const taken = (["token", "url"] as const)
-      .map((name) => ({ name, flag: takeValueFlag(argv, index, name) }))
-      .find(({ flag }) => flag !== undefined);
-    if (taken?.flag !== undefined) {
-      values[taken.name] = taken.flag.value;
-      index = taken.flag.next;
+    const taken = takeNamedValueFlag(argv, index);
+    if (taken !== undefined) {
+      values[taken.name] = taken.value;
+      index = taken.next;
+      continue;
+    }
+    if (isInsecureHttpFlag(argv[index] as string)) {
+      allowInsecureHttp = true;
+      index++;
       continue;
     }
     const named = daemonFlagNamed(argv[index] as string);
@@ -121,7 +147,7 @@ function extractGlobalFlags(argv: readonly string[]): {
   if (values.url !== undefined && daemonFlag !== undefined) {
     throw new UsageError("--url cannot be used with --local or --gateway");
   }
-  return { daemonFlag, rest, token: values.token, url: values.url };
+  return { allowInsecureHttp, daemonFlag, rest, token: values.token, url: values.url };
 }
 
 /** why: the ports barrel is loaded here, not statically, so `simlock --help` answers without
@@ -206,8 +232,9 @@ function remoteFarm(
   url: string | undefined,
   token: string | undefined,
   daemonFlag: DaemonFlag,
+  insecure: Pick<RemoteFarm, "allowInsecureHttpFlag" | "allowInsecureHttpVariable">,
 ): RemoteFarm | undefined {
-  return url !== undefined && daemonFlag === undefined ? { token, url } : undefined;
+  return url !== undefined && daemonFlag === undefined ? { ...insecure, token, url } : undefined;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {
@@ -292,7 +319,7 @@ export async function runCli(
   let flag: DaemonFlag;
   let remote: RemoteFarm | undefined;
   try {
-    const { token, url: urlFlag, daemonFlag, rest } = extractGlobalFlags(argv);
+    const { allowInsecureHttp, token, url: urlFlag, daemonFlag, rest } = extractGlobalFlags(argv);
     flag = daemonFlag;
     if (rest[0] === "--version" || rest[0] === "-v") {
       // why: loaded here, not statically, so only this request pays for the ports barrel, as a real command does.
@@ -310,7 +337,10 @@ export async function runCli(
     resolved = environment ?? (await buildDefaultEnvironment(daemonFlag));
     if (daemonFlag === "gateway") await refuseWhenNoGateway(resolved, command.path, command.rest);
     const url = urlFlag ?? nonEmpty(resolved.tunnelUrl);
-    remote = remoteFarm(url, token ?? resolved.tunnelToken, daemonFlag);
+    remote = remoteFarm(url, token ?? resolved.tunnelToken, daemonFlag, {
+      allowInsecureHttpFlag: allowInsecureHttp,
+      allowInsecureHttpVariable: resolved.allowInsecureHttpFromEnv,
+    });
     if (remote !== undefined) refuseInRemoteMode(command.path, command.rest);
     return await command.module.run(command.rest, {
       path: command.path,
@@ -318,6 +348,8 @@ export async function runCli(
       token,
       url,
       daemonFlag,
+      allowInsecureHttpFlag: allowInsecureHttp,
+      allowInsecureHttpVariable: resolved.allowInsecureHttpFromEnv,
     });
   } catch (error: unknown) {
     await writeError(

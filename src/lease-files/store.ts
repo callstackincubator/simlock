@@ -5,6 +5,7 @@ import { guardedBody } from "./guarded-body.js";
 import { DEFAULT_LIMITS } from "./limits.js";
 import { isFileName } from "./names.js";
 import type { LeaseFileView, LeaseFilesDeps, LeaseFilesGrant } from "./types.js";
+import { errorMessage } from "../shared/index.js";
 
 function folderKey(id: string, grantedAt: number): string {
   return `${Buffer.from(id, "utf8").toString("hex")}-${String(grantedAt)}`;
@@ -96,7 +97,7 @@ export class LeaseFolders {
       await this.#deps.filesystem.rm(this.#pathOf(grant));
     } catch (error: unknown) {
       this.#deps.logger.warn("A lease's file folder could not be removed; startup removes it", {
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
         leaseId: grant.id,
       });
     }
@@ -124,7 +125,7 @@ export class LeaseFolders {
       } catch (error: unknown) {
         logger.warn("A lease file folder could not be swept", {
           entry,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         });
       }
     }

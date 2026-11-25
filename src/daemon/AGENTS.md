@@ -25,7 +25,7 @@ Start and stop:
 - `daemon.stop` releases nothing; leases persist with their deadlines.
 - `dispose` stops the event history after the drivers are disposed, and closes `state.db` last.
 - A history file that fails costs only history. A start the history refuses (a newer stored projection version, a failed migration) stops the daemon (`history-refused`).
-- The Windows supervisor (`service-main.ts`, ADR 0086) imports only `ports/`.
+- The Windows supervisor (`service-main.ts`, ADR 0086) imports only `ports/` and `shared/`.
 - A daemon works in its own role's data directory. Its one look outside is the update's `socketHeld` probe of the other role's socket (`composition-support.ts`).
 
 Connections:

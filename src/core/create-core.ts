@@ -45,6 +45,7 @@ import { stableError } from "./stable-error.js";
 import { readStartup, type StartupRead } from "./startup-read.js";
 import { BaselineService } from "./baselines.js";
 import { WarmPool } from "./warm-pool/index.js";
+import { errorMessage } from "../shared/index.js";
 
 export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "devices" | "health" | "idle">;
 
@@ -293,15 +294,13 @@ export function createCore(options: CoreOptions): Core {
   options.eventBus.subscribe("component.removed", () => {
     baselines.checkStale().catch((error: unknown) => {
       options.logger?.warn(
-        `could not check baselines after a component was removed: ${error instanceof Error ? error.message : String(error)}`,
+        `could not check baselines after a component was removed: ${errorMessage(error)}`,
       );
     });
   });
   const dropReplacedBaselines = (): Promise<void> =>
     baselines.dropReplaced().catch((error: unknown) => {
-      options.logger?.warn(
-        `could not drop a replaced baseline version: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      options.logger?.warn(`could not drop a replaced baseline version: ${errorMessage(error)}`);
     });
   // why: the last device of a replaced version leaving, by any path, is what lets its source go.
   options.eventBus.subscribe("device.deleted", () => {
@@ -443,7 +442,7 @@ export function createCore(options: CoreOptions): Core {
         } catch (error: unknown) {
           options.logger?.error("startup delete of a spent device failed", {
             deviceId: device.id,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage(error),
           });
         }
       },
@@ -484,9 +483,7 @@ export function createCore(options: CoreOptions): Core {
       try {
         await baselines.checkStale();
       } catch (error: unknown) {
-        options.logger?.warn(
-          `could not check baselines at startup: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        options.logger?.warn(`could not check baselines at startup: ${errorMessage(error)}`);
       }
       warmPool.start();
       capacityObserver.start();
@@ -512,7 +509,7 @@ export function createCore(options: CoreOptions): Core {
           } catch (error: unknown) {
             options.logger?.error("shutdown of an idle device at daemon stop failed", {
               deviceId: device.id,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage(error),
             });
           }
         }),

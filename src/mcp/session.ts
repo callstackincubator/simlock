@@ -36,6 +36,7 @@ import type {
   RotateDeviceOutput,
   RunOnDeviceInput,
 } from "./contracts.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * why: How many ended leases `#announceLeaseLost` remembers, to keep one ending from reaching a
@@ -804,12 +805,7 @@ function noop(): void {}
 function asSimlockError(error: unknown): unknown {
   return isSimlockError(error)
     ? error
-    : new SimlockError(
-        "DAEMON_CONNECTION_LOST",
-        "transport",
-        error instanceof Error ? error.message : String(error),
-        {},
-      );
+    : new SimlockError("DAEMON_CONNECTION_LOST", "transport", errorMessage(error), {});
 }
 
 /**

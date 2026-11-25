@@ -10,7 +10,6 @@ import { registerLeaseRequestRoutes } from "./app-lease-request-routes.js";
 import { registerLeaseRoutes } from "./app-lease-routes.js";
 import {
   emptyBodyAsNone,
-  errorMessage,
   findOwnedLease,
   optionalQuery,
   parseDuration,
@@ -67,6 +66,7 @@ import {
 import { validationHook } from "./routes.js";
 import { pipeSse } from "./sse.js";
 import { LeaseRequestTracker } from "./tracker.js";
+import { errorMessage } from "../shared/index.js";
 
 export type { HttpAppDisposable, HttpGatewayDeps, HttpLeaseFiles, HttpMount } from "./app-types.js";
 

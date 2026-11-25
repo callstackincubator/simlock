@@ -16,7 +16,7 @@ import {
 } from "../../contract/index.js";
 import type { LeaseGrant, SimlockAdminClient } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
-import { connectDaemonClient } from "../connect.js";
+import { checkedFarmOrigin, connectDaemonClient } from "../connect.js";
 import { commandArgs, requiredPositional, UsageError, withHelpHint, writeResult } from "../args.js";
 import { parseDuration } from "../duration.js";
 import { checkedRunId } from "./run-id.js";
@@ -24,6 +24,7 @@ import { writeError } from "../errors.js";
 import { reconnectToFarm } from "../remote-reconnect.js";
 import { waitForTermination } from "../termination.js";
 import type { CommandContext } from "../tree.js";
+import { errorMessage } from "../../shared/index.js";
 
 /**
  * why: A key that is safe to the left of `=` in a shell `export`. Anything else is a command
@@ -148,10 +149,7 @@ async function runLease(
   const farmOrigin =
     environment.remote === undefined
       ? undefined
-      : (await import("../../simlock-client/farm-url.js")).checkedFarmUrl(
-          environment.remote.url,
-          "--url",
-        );
+      : (await checkedFarmOrigin(environment.remote.url, environment.remote)).url;
   let leaseLost = false;
   let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
@@ -299,7 +297,7 @@ async function runLease(
       if (disconnected) {
         endHoldingLease(
           "DAEMON_CONNECTION_LOST",
-          `could not release the lease: ${error instanceof Error ? error.message : String(error)}`,
+          `could not release the lease: ${errorMessage(error)}`,
         );
       } else {
         queueErrorWrite(error);

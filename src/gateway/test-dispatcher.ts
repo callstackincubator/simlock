@@ -18,6 +18,7 @@ import { FleetLeaseIndex } from "./lease-index.js";
 import { createRoutingPolicy } from "./routing.js";
 import { ScriptedWorkerClient } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
+import { errorMessage } from "../shared/index.js";
 
 export const gatewayConfig = testConfig(
   {
@@ -157,7 +158,7 @@ export function harness(
     directory,
     describeFailure: (error) => ({
       code: "INTERNAL",
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     }),
     leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
     maxPerRequester: { android: 1, ios: 1 },
