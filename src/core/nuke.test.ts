@@ -331,6 +331,7 @@ function config(): TestEngineConfig {
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
+      refillDelayMs: 0,
       reserveRunning: { android: 0, ios: 0 },
       targets: [],
       quarantine: {
