@@ -55,7 +55,7 @@ A worker can take a request only when it:
 - offers the model or device class asked for, with a matching OS version already installed;
 - serves the iOS mode the request or its baseline names (see [Slim iOS simulators](/simlock/docs/concepts/slim-simulators#modes-a-worker-serves)), and slims every category in its `except` list;
 - holds a current copy of the baseline the request names;
-- has every optional capability the request needs, such as the agent-device integration;
+- has every capability the request needs: an optional module such as the agent-device integration, or a tag the operator gave the worker (see [Tags](/simlock/docs/reference/configuration#tags));
 - makes simulators or emulators, for a request without `--physical` (a worker that serves only phones on a platform is skipped);
 - has no requests waiting in its own queue, for example from agents on that machine. This does not apply to physical devices.
 

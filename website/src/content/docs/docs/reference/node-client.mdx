@@ -92,7 +92,7 @@ The fields of `requestLease`'s input. The same choices as [`simlock lease`](/sim
 | `requesterId` | Lease under another requester id than the connection's principal. |
 | `idempotencyKey` | 1 to 200 characters. The same key again joins the request already made. |
 | `metadata` | An object of text values for a gateway's admission command. See [Rank or refuse requests](/simlock/docs/gateway/admission). |
-| `requires` | Up to 8 optional modules the serving worker must have on, such as `stream`, each once. A request no worker can meet fails with `CAPABILITY_MISSING`. |
+| `requires` | Up to 8 capability names the serving worker must have, each once: an optional module that is on, such as `stream`, or a tag from the worker's `tags` configuration. Sent with `idempotencyKey`, it is part of what makes a repeat the same request: the same names in any order get the first answer, and a different set is `IDEMPOTENCY_CONFLICT`. A request no worker can meet fails with `CAPABILITY_MISSING`. |
 
 ### Stop waiting
 
