@@ -257,6 +257,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
         configOverrides: {
           capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
           capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
+          warmPool: { refillDelayMs: 0 },
           ...(directPort === undefined
             ? {
                 gateway: {

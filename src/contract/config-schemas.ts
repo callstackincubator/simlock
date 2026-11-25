@@ -81,6 +81,7 @@ export const configSchema = z.object({
     baselineLearnAfter: z.number().optional(),
     reserveRunning: z.object({ ios: z.number(), android: z.number() }),
     maxConcurrentBoots: z.number(),
+    refillDelayMs: z.number(),
     targets: z.array(
       z.object({
         platform: z.enum(["ios", "android"]),
