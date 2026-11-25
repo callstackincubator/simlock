@@ -161,10 +161,6 @@ export function statsRefusal(refusal: UsageWindowRefusal): string {
   }
 }
 
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 // why: a plain GET to the session path says what the path is for, so a person who opens it in a browser knows to open a socket.
 export function upgradeRequired(): Response {
   return new Response(

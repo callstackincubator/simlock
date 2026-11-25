@@ -76,12 +76,8 @@ import { GatewayUplink } from "./gateway-uplink.js";
 import type { RelayTargets, TwoWayRelayTargets } from "./relay.js";
 import { discoverDrivers } from "./driver-discovery.js";
 import { driversWithDefaults } from "../driver-registry/index.js";
-import {
-  updateOptionsFor,
-  errorMessage,
-  startHistory,
-  stopForRefusedHistory,
-} from "./composition-support.js";
+import { updateOptionsFor, startHistory, stopForRefusedHistory } from "./composition-support.js";
+import { errorMessage } from "../shared/index.js";
 
 export interface WorkerOptions {
   readonly defaultRequesterId?: string;

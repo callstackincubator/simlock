@@ -26,6 +26,7 @@ import {
   type IpcConnector,
   type LaunchedDaemon,
 } from "../ports/index.js";
+import { errorMessage } from "../shared/index.js";
 
 /** What it takes to reach a daemon that is already listening -- no launcher anywhere in it,
  * which is the whole point of the type existing separately. The `heartbeat` option that used
@@ -147,11 +148,6 @@ function isUnavailable(error: unknown): boolean {
 
 function delay(clock: Clock, milliseconds: number): Promise<void> {
   return new Promise((resolve) => clock.setTimer(milliseconds, resolve));
-}
-
-function errorMessage(error: unknown): string {
-  if (isSimlockError(error)) return error.message;
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** why: connects to a farm's session path with the token and never launches anything, as a farm has no daemon of this machine's to start (ADR 0081 §3); tool calls and renewals both use it. */

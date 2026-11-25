@@ -981,7 +981,7 @@ describe("the error-message unwrap outside src/shared/", () => {
           "const one = e instanceof Error ? e.message : String(e);",
           "const split = e instanceof Error\n  ? e.message\n  : String(e);",
           "const inside = `failed: ${e instanceof Error ? e.message : String(e)}`;",
-          "function errorMessage(error: unknown): string { return ''; }",
+          ["function", "errorMessage(error: unknown): string { return ''; }"].join(" "),
           "// e instanceof Error ? e.message : String(e)",
           "const quoted = 'e instanceof Error ? e.message : String(e)';",
           "const other = e instanceof Error ? e.stack : String(e);",

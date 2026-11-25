@@ -1,6 +1,7 @@
 import { DriverCrashError } from "../../core/index.js";
 import type { Clock, Logger, ProcessResult, ProcessRunner } from "../../ports/index.js";
 import type { ProcessOutcome } from "./boot-courtesies.js";
+import { errorMessage } from "../../shared/index.js";
 
 /** why: what `runCommand` does with a command it stopped waiting for, instead of killing it at once. */
 export interface LateAnswer {
@@ -84,8 +85,4 @@ export async function deleteLateSimulator(
       `could not delete simulator ${udid} that simctl ${args.join(" ")} made after its limit: ${errorMessage(error)}`,
     );
   }
-}
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

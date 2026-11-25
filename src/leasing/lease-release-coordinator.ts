@@ -8,6 +8,7 @@ import {
   type ReclaimCoordinator,
 } from "../core/index.js";
 import type { EndedLease, LeaseEndParticipant } from "./lease-ports.js";
+import { errorMessage } from "../shared/index.js";
 
 export type LeaseReleaseReason = "explicit" | "killed" | "device-lost";
 
@@ -360,7 +361,7 @@ export class LeaseReleaseCoordinator
         .catch((error: unknown) => {
           this.#logger.error("background reclaim failed", {
             deviceId: released.device.id,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage(error),
             leaseId: released.lease.id,
           });
         })
@@ -444,7 +445,7 @@ export class LeaseReleaseCoordinator
     } catch (error: unknown) {
       this.#logger.error("lease-end participant failed", {
         deviceId: ended.deviceId,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
         leaseId: ended.leaseId,
       });
     }

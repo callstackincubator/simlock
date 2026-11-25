@@ -24,6 +24,7 @@ import type { DaemonServer } from "./server.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import { SimlockWire, type CallHooks, type RelayHead } from "../simlock-client/wire.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
+import { errorMessage } from "../shared/index.js";
 
 export const MIB = 1024 * 1024;
 export const KIB = 1024;
@@ -78,7 +79,7 @@ export async function settleWithin<T>(promise: Promise<T>, withinMs = 5_000): Pr
     (error: unknown): Settled<T> => ({
       state: "rejected",
       code: (error as { code?: unknown } | null)?.code,
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     }),
   );
   return Promise.race([outcome, sleep(withinMs).then((): Settled<T> => ({ state: "pending" }))]);

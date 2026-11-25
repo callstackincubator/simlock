@@ -17,11 +17,11 @@ import type {
   ParentWatch,
   ParentWatchHandle,
 } from "../ports/index.js";
-import { errorMessage } from "./errors.js";
 import { UsageError } from "./usage-error.js";
 import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import type { CliEnvironment, CliEnvironmentPorts, Output } from "./types.js";
+import { errorMessage } from "../shared/index.js";
 
 const EXIT_GRACE_MS = 2_000;
 // why: a daemon whose start failed is already stopping when it answers, so its stopping refusal is the failed start.

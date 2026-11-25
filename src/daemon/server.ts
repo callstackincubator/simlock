@@ -29,7 +29,6 @@ import { StartupFailedError } from "./error-code.js";
 import { RelayConnection } from "./relay.js";
 import {
   type Connection,
-  errorMessage,
   errorStack,
   respondError,
   type SessionIdentity,
@@ -44,6 +43,7 @@ import {
   type DaemonServerOptions,
 } from "./server-options.js";
 import { acceptRelayChannel, ConnectionRequests } from "./server-requests.js";
+import { errorMessage } from "../shared/index.js";
 export type { DaemonServerOptions } from "./server-options.js";
 
 export class DaemonServer {
