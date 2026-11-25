@@ -12,6 +12,9 @@ export interface CommandContext {
   /** why: `--url`, else `SIMLOCK_URL`; `simlock tunnel` reads it even with `--local`, as it always has. */
   readonly url: string | undefined;
   readonly daemonFlag: DaemonFlag;
+  /** why: `--allow-insecure-http` and the variable's raw value, for `simlock tunnel`, which checks `SIMLOCK_URL` even with `--local`. */
+  readonly allowInsecureHttpFlag: boolean;
+  readonly allowInsecureHttpVariable: string | undefined;
 }
 
 export interface CommandModule {

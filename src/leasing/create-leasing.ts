@@ -35,6 +35,7 @@ import { emitLeaseRefusal } from "./lease-refusal.js";
 import { LeaseStartup } from "./lease-startup.js";
 import { PhysicalDeviceWatcher } from "./physical-device-watcher.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
+import { errorMessage } from "../shared/index.js";
 
 export type LeasingConfig = Pick<Config, "health" | "lease">;
 
@@ -323,5 +324,5 @@ export function createLeasing(options: LeasingOptions): Leasing {
 }
 
 function describeUnclassifiedFailure(error: unknown): LeaseRequestFailure {
-  return { code: "INTERNAL", message: error instanceof Error ? error.message : String(error) };
+  return { code: "INTERNAL", message: errorMessage(error) };
 }

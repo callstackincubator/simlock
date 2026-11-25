@@ -40,7 +40,7 @@ import {
 } from "../../core/index.js";
 import type { Clock, Logger, ProcessRunner, ProcessTable } from "../../ports/index.js";
 import { runAfterBoot, type AfterBoot } from "./boot-courtesies.js";
-import { errorMessage, runCommand } from "./command-run.js";
+import { runCommand } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
 import { COMMAND_TIMEOUT_MS, Simctl } from "./simctl.js";
 import { DeviceMarks } from "./marks.js";
@@ -74,6 +74,7 @@ import { parseManagedDevices } from "./simctl-parse.js";
 import { type IosDriverData, iosDriverData, requireIosPlatform } from "./simulator-data.js";
 import { IOS_PASSTHROUGH_TOOLS, passthroughCommand } from "./passthrough-rules.js";
 import { IOS_RUNTIME_MIN_FREE_BYTES } from "./runtime-images.js";
+import { errorMessage } from "../../shared/index.js";
 
 const DEFAULT_FULL_BOOT_TIMEOUT_MS = 300_000;
 const PROVISION_ESTIMATE_MS = 500;

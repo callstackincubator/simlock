@@ -191,7 +191,3 @@ export interface DoctorReconcileOptions {
 export function key(platform: string, deviceId: string): string {
   return `${platform}:${deviceId}`;
 }
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

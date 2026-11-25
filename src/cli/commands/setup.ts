@@ -12,6 +12,7 @@ import { connectDaemonClient } from "../connect.js";
 import { escapeControl } from "../escape.js";
 import type { CommandContext } from "../tree.js";
 import { writeDoctorFindings } from "./doctor.js";
+import { errorMessage } from "../../shared/index.js";
 
 const USAGE =
   "Usage: simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]\n";
@@ -88,7 +89,7 @@ async function checkMachine(context: CommandContext): Promise<Machine> {
       await client.close();
     }
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     return { summary: `not checked: ${message}`, findings: [] };
   }
 }

@@ -19,6 +19,7 @@ import type {
   LeaseProgress,
   SeedProgressUpdate,
 } from "./types.js";
+import { errorMessage } from "../shared/index.js";
 
 /** The one legacy code a protocol-2 daemon answers `hello` with. There is no live protocol-2
  * daemon left in this repository to negotiate against, so this constant documents the historical
@@ -194,12 +195,7 @@ export class SimlockWire {
 
   #toHelloError(error: unknown): AnySimlockError {
     if (!(error instanceof WireCallError)) {
-      return new SimlockError(
-        "DAEMON_CONNECTION_LOST",
-        "transport",
-        error instanceof Error ? error.message : String(error),
-        {},
-      );
+      return new SimlockError("DAEMON_CONNECTION_LOST", "transport", errorMessage(error), {});
     }
     if (error.code === LEGACY_MISMATCH_CODE) {
       return mapLegacyProtocolMismatch(PROTOCOL_VERSION_RANGE, error.message);

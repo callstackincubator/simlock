@@ -55,9 +55,10 @@ These flags work anywhere on the command line, before or after the command.
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--token <secret>` | The credential a command sends: the admin token for the local daemon, or the bearer token for a farm (see [Remote mode](#remote-mode)). `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
-| `--url <url>` | The farm to run the command on: a standalone worker or a gateway, `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. `--url=<url>` also works. A `--url` that is not valid is a usage error. | `SIMLOCK_URL`. See [Remote mode](#remote-mode) |
+| `--url <url>` | The farm to run the command on: a standalone worker or a gateway, `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost` unless you pass `--allow-insecure-http`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. `--url=<url>` also works. A `--url` that is not valid is a usage error. | `SIMLOCK_URL`. See [Remote mode](#remote-mode) |
 | `--gateway` | Send the command to this machine's gateway, the daemon in `~/.simlock/gateway`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--local` | Send the command to this machine's worker, the daemon in `~/.simlock`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
+| `--allow-insecure-http` | Let a farm URL be `http://` to any host, not only `127.0.0.1`, `[::1]` or `localhost`. The token then travels unencrypted. Takes no value (`--allow-insecure-http=1` is a usage error). Read only when a command checks a farm URL. | `SIMLOCK_ALLOW_INSECURE_HTTP=1` |
 | `--help`, `-h` | As the first word, or with no command: print the list of commands. | — |
 
 `--gateway` and `--local` together are a usage error, and so is `--gateway=yes` or `--local=yes`. So is `--url` with either of them.
@@ -279,7 +280,7 @@ simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<ca
 | `forward <device-port>[:<caller-port>]` | Make `localhost:<caller-port>` on this machine reach `localhost:<device-port>` on the device. It adds no `adb forward` rule. The caller port is 1024 to 65535 and listens on loopback only; the command binds it before it asks the worker for anything. | The caller port is the device port |
 | `emulator adb[:<caller-port>]` | Let your own `adb`, and so Android Studio, list the leased Android emulator as a device and drive it: shell, install, Logcat, the debugger and `adb reverse`. The command runs `adb connect 127.0.0.1:<caller-port>` itself once the worker confirms, and `adb disconnect` when it ends. Name it once; `adb` is the only emulator port. The caller port is 1024 to 65535 and listens on loopback only. A lease on a phone or an iOS simulator is refused with `TUNNEL_UNSUPPORTED`. | A free caller port, printed in the line |
 | `--lease <lease-id>` | The lease to reach, 1 to 256 characters. | An agent token's only lease; an operator token must name one |
-| `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. A `--url` that is not, is a usage error. | `SIMLOCK_URL` |
+| `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost` unless you pass `--allow-insecure-http` or set `SIMLOCK_ALLOW_INSECURE_HTTP=1`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. A `--url` that is not, is a usage error. | `SIMLOCK_URL` |
 | `--token <secret>` | The bearer token, 1 to 4096 characters. | `SIMLOCK_TOKEN` |
 
 It prints one line per tunnel, and runs until Ctrl-C or SIGTERM, which close the tunnels and exit 0:
@@ -920,6 +921,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | `SIMLOCK_AGENT_ID` | The requester identity: printable, no control characters, at most 256 characters. When set, it wins over the session variables below. | Unset |
 | `SIMLOCK_RUN` | The run id `simlock lease` gives its lease when `--run` is not given: 1 to 128 letters, digits, `.`, `_` or `-`. An empty value is unset; any other bad value exits 2, naming the variable. Without it, on GitHub Actions (`GITHUB_ACTIONS` is `true` and `GITHUB_RUN_ID` is set), the run id is `$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT`. | Unset |
 | `SIMLOCK_URL` | The farm every command runs on, when `--url` is not given; the same rules as `--url`. See [Remote mode](#remote-mode). | Unset |
+| `SIMLOCK_ALLOW_INSECURE_HTTP` | `1` lets a farm URL be `http://` to any host, as `--allow-insecure-http` does; the token then travels unencrypted. Empty counts as unset; any other value is a usage error, and only where a command checks a farm URL. | Unset |
 | `SIMLOCK_TOKEN` | The bearer token sent to the farm, when `--token` is not given. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
 | `CODEX_SESSION_ID` | Set by Codex. Gives the identity `codex:<id>`. | — |

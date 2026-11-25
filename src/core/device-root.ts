@@ -2,6 +2,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { Filesystem, IdGenerator, PathDetails } from "../ports/index.js";
 import type { Platform } from "./domain.js";
+import { errorMessage } from "../shared/index.js";
 
 export const OWNED_ROOT_MARKER_FILE = ".simlock-owned.json";
 
@@ -363,7 +364,7 @@ function refusal(
 }
 
 function describeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   const code = errorCode(error);
 
   return typeof code === "string" ? `${message} (${code})` : message;

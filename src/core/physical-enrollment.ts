@@ -3,6 +3,7 @@ import type { PhysicalDevice, Platform } from "./domain.js";
 import type { Driver, DriverRefusalReason } from "./driver.js";
 import type { PhysicalEnrollmentInput, RegistrySnapshot } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
+import { errorMessage } from "../shared/index.js";
 
 export type DeviceNotEnrollableReason =
   | DriverRefusalReason
@@ -182,9 +183,7 @@ export class PhysicalEnrollment {
     try {
       inspection = await driver.inspectPhysical(canonicalId ?? id);
     } catch (error: unknown) {
-      throw new PhysicalInspectionError(
-        `Reading ${id} failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new PhysicalInspectionError(`Reading ${id} failed: ${errorMessage(error)}`);
     }
     if (!inspection.enrollable) {
       throw new DeviceNotEnrollableError(

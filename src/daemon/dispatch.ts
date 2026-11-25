@@ -35,6 +35,7 @@ import {
   type UsageOutput,
   type leaseProgressSchema,
 } from "../contract/index.js";
+import { errorMessage } from "../shared/index.js";
 
 /**
  * Request-scoped progress, as the contract declares it. Structurally identical to `core`'s own
@@ -306,9 +307,7 @@ function logOperation(
   const failed = {
     ...fields,
     code,
-    ...(call.input === undefined
-      ? {}
-      : { message: error instanceof Error ? error.message : String(error) }),
+    ...(call.input === undefined ? {} : { message: errorMessage(error) }),
   };
   if (code === "INTERNAL") observe.logger.error("operation", failed);
   else observe.logger.info("operation", failed);
@@ -442,7 +441,7 @@ export async function usageAnswer(
   } catch (error) {
     throw new DispatchError(
       "INTERNAL",
-      `The usage figures could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      `The usage figures could not be read: ${errorMessage(error)}`,
     );
   }
   if (result.kind === "figures") return result.usage;
@@ -464,10 +463,7 @@ export async function eventsPageAnswer(read: Promise<EventsPageRead>): Promise<E
   try {
     result = await read;
   } catch (error) {
-    throw new DispatchError(
-      "INTERNAL",
-      `The events could not be read: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    throw new DispatchError("INTERNAL", `The events could not be read: ${errorMessage(error)}`);
   }
   if (result.kind === "events") return result.events;
   if (result.kind === "unavailable") {

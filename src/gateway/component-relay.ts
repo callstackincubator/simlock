@@ -29,6 +29,7 @@ import {
   type WorkerDispatchTarget,
 } from "./fleet-ports.js";
 import type { WorkerView } from "./worker-registry.js";
+import { errorMessage } from "../shared/index.js";
 
 type RelayOperation = (typeof OPERATIONS)["worker.install-component"];
 type RelayInput = z.infer<RelayOperation["input"]>;
@@ -217,7 +218,7 @@ function fromError(view: WorkerView, error: unknown): WorkerInstallResult {
     const outcome = error.code === "DOWNLOADS_DISABLED" ? "refused" : "failed";
     return bounded(view, result(view, outcome, { code: error.code, message: error.message }));
   }
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return bounded(view, result(view, "failed", { code: "INTERNAL", message }));
 }
 

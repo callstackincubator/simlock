@@ -124,6 +124,8 @@ export interface ConnectSimlockAdminOptions {
   readonly credential?: string;
   readonly url?: string;
   readonly token?: string;
+  /** Lets `url` name an `http://` farm on any host; the token then travels unencrypted. Ignored without `url`. */
+  readonly allowInsecureHttp?: boolean;
   readonly webSocket?: WebSocketClientConnector;
   readonly clock?: Clock;
   readonly signal?: AbortSignal;
