@@ -387,7 +387,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       record.fleetRequestId ?? null,
       nullable(record.runId),
       nullable(record.label),
-      record.requires === undefined ? null : JSON.stringify(record.requires),
+      requiresText(record.requires),
       request.platform,
       request.model ?? null,
       request.osVersion ?? null,
@@ -570,6 +570,10 @@ function deviceFromRow(
 
 function exceptOf(reader: RowReader): readonly string[] | undefined {
   return reader.optText("except_categories")?.split(",");
+}
+
+function requiresText(requires: readonly string[] | undefined): string | null {
+  return requires === undefined ? null : JSON.stringify(requires);
 }
 
 function requiresFromRow(reader: RowReader): readonly string[] | undefined {

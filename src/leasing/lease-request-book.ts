@@ -260,12 +260,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
   ): Promise<{ readonly id: string; readonly started: Started }> {
     const record = await this.options.store.createLeaseRequest({
       id,
-      ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
-      ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
-      ...(options.runId === undefined ? {} : { runId: options.runId }),
-      ...(options.label === undefined ? {} : { label: options.label }),
-      ...(options.requires === undefined ? {} : { requires: options.requires }),
-      ...(options.fleetRequestId === undefined ? {} : { fleetRequestId: options.fleetRequestId }),
+      ...optionalFields(options),
       ownerId: options.ownerId,
       request,
       requesterId: options.requesterId,
@@ -428,6 +423,17 @@ function storedResult<Grant>(record: LeaseRequestRecord<Grant>): Promise<Grant> 
   if (record.state === "cancelled") return Promise.reject(new RequestCancelledError(record.id));
   const failure = record.failure ?? { code: "INTERNAL", message: "Lease request failed" };
   return Promise.reject(new ReplayedLeaseRequestError(failure.code, failure.message));
+}
+
+function optionalFields(options: LeaseRequestOptions) {
+  return {
+    ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
+    ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
+    ...(options.runId === undefined ? {} : { runId: options.runId }),
+    ...(options.label === undefined ? {} : { label: options.label }),
+    ...(options.requires === undefined ? {} : { requires: options.requires }),
+    ...(options.fleetRequestId === undefined ? {} : { fleetRequestId: options.fleetRequestId }),
+  };
 }
 
 /** why: ADR 0091 §3: the names are compared as a set, and an empty list is none. */
