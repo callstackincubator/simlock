@@ -71,4 +71,80 @@ describe("CLI: plain http to a remote farm by opt-in", () => {
       expect(farm.connections, argv.join(" ")).toEqual([]);
     }
   });
+
+  it("the opt-in changes nothing else: other schemes, a path and the length limit refuse as before, a bad variable value is refused only where a farm URL is checked", async () => {
+    const scheme = "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost";
+    const origin = "--url must be the farm's origin only: no path, query or fragment";
+    const variable = "SIMLOCK_ALLOW_INSECURE_HTTP must be 1, or unset";
+    const cases: { setup: Setup; argv: string[]; message: string }[] = [
+      ...["ws://gw.example.com", "ftp://gw.example.com", "gw.example.com:4700"].map((url) => ({
+        argv: ["whoami", "--allow-insecure-http", "--url", url],
+        message: scheme,
+        setup: {},
+      })),
+      ...["ws://gw.example.com", "gw.example.com:4700"].map((url) => ({
+        argv: ["whoami", "--url", url],
+        message: scheme,
+        setup: { insecureVariable: "1" },
+      })),
+      {
+        argv: ["whoami", "--allow-insecure-http", "--url", `http://${"a".repeat(2042)}`],
+        message: scheme,
+        setup: {},
+      },
+      {
+        argv: ["whoami", "--allow-insecure-http", "--url", "http://gw.example.com/v1"],
+        message: origin,
+        setup: {},
+      },
+      {
+        argv: ["whoami", "--allow-insecure-http=1", "--url", TAILSCALE],
+        message: "--allow-insecure-http takes no value",
+        setup: {},
+      },
+      ...["true", "yes", "0"].map((value) => ({
+        argv: ["whoami", "--url", TAILSCALE],
+        message: variable,
+        setup: { insecureVariable: value },
+      })),
+      {
+        argv: ["whoami", "--url", "ws://gw.example.com"],
+        message: variable,
+        setup: { insecureVariable: "true" },
+      },
+      ...["true", "yes"].map((value) => ({
+        argv: ["tunnel", "forward", "8081", "--local"],
+        message: variable,
+        setup: { insecureVariable: value, url: TAILSCALE },
+      })),
+      {
+        argv: ["tunnel", "forward", "8081", "--local"],
+        message: `${scheme}; to connect over plain http anyway (the token is sent unencrypted), pass --allow-insecure-http or set SIMLOCK_ALLOW_INSECURE_HTTP=1`,
+        setup: { url: TAILSCALE },
+      },
+    ];
+    for (const { setup, argv, message } of cases) {
+      const { farm, output, run } = session(setup);
+      expect(await run(argv), argv.join(" ")).toBe(2);
+      expect(JSON.parse(output.stderr), argv.join(" ")).toEqual({
+        error: { code: "USAGE", message },
+      });
+      expect(farm.connections, argv.join(" ")).toEqual([]);
+    }
+
+    const local: { setup: Setup; argv: string[] }[] = [
+      { setup: {}, argv: ["whoami", "--local", "--allow-insecure-http"] },
+      { setup: { insecureVariable: "true" }, argv: ["whoami"] },
+      ...["1", "true"].map((value) => ({
+        argv: ["whoami", "--local"],
+        setup: { insecureVariable: value, url: TAILSCALE },
+      })),
+    ];
+    for (const { setup, argv } of local) {
+      const { farm, output, run } = session(setup);
+      expect(await run(argv), argv.join(" ")).toBe(0);
+      expect(output.stderr, argv.join(" ")).toBe("");
+      expect(farm.connections, argv.join(" ")).toEqual([]);
+    }
+  });
 });
