@@ -512,3 +512,29 @@ export function reconnectWhileWaiting<T>(options: {
     );
   });
 }
+
+export interface SlimHintClient {
+  getCatalog(): Promise<{
+    readonly platforms: readonly {
+      readonly platform: string;
+      readonly slimCategories?: readonly string[] | undefined;
+    }[];
+  }>;
+}
+
+export interface SlimHintGrant {
+  readonly device: {
+    readonly physical: boolean;
+    readonly mode?: string | undefined;
+    readonly except?: readonly string[] | undefined;
+    readonly spec: { readonly platform: string };
+  };
+}
+
+export async function slimLeaseHint(_input: {
+  readonly clock: Clock;
+  readonly client: SlimHintClient;
+  readonly grant: SlimHintGrant;
+}): Promise<string | undefined> {
+  return undefined;
+}
