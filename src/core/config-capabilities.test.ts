@@ -158,4 +158,17 @@ describe("loadConfig with worker tags", () => {
       await expect(load({ tags })).rejects.toThrow(message);
     }
   });
+
+  it("on a gateway, warns that tags configure a worker and starts, and says nothing when tags are absent", async () => {
+    const set: string[] = [];
+    const absent: string[] = [];
+
+    await load({ tags: ["bank-network"] }, [entry()], set, "gateway");
+    await load({}, [entry()], absent, "gateway");
+
+    expect(set).toEqual([
+      'Ignoring "tags": it configures a worker, and this daemon runs in gateway mode.',
+    ]);
+    expect(absent).toEqual([]);
+  });
 });
