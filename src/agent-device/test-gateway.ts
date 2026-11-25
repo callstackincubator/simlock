@@ -200,6 +200,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const startGateway = async (port: number): Promise<DaemonServer> => {
     const started = await startDaemon({
       clock,
+      hostLoadProbe: null,
       configOverrides: {
         ...(options.agentDevice === "unset"
           ? {}
@@ -254,6 +255,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const launch = (directPort: number | undefined) =>
       startDaemon({
         clock: workerClock,
+        hostLoadProbe: null,
         configOverrides: {
           capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
           capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
