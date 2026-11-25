@@ -1,6 +1,6 @@
 # 0090. A seed is settled in the background and replaced by its settled copy
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-19
 - **Issue:** [#1732](https://github.com/callstackincubator/simlock/issues/1732) (request [#1540](https://github.com/callstackincubator/simlock/issues/1540))
 - **Narrows:** [ADR 0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md)
