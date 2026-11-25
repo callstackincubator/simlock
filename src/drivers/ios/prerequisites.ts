@@ -22,7 +22,7 @@ const XCODE_FIRST_LAUNCH: MissingPrerequisite = {
 };
 
 /**
- * What the iOS driver needs and Simlock never installs: a selected Xcode whose license is
+ * why: What the iOS driver needs and Simlock never installs: a selected Xcode whose license is
  * accepted and whose first-launch setup is done. Runs `xcodebuild` and nothing else.
  */
 export function iosPrerequisites(options: {
@@ -45,7 +45,7 @@ async function missingIosPrerequisites(
     throw error;
   }
   if (version.code !== 0) {
-    // The same test `toolVersions` makes: the command line tools' `xcodebuild` refuses to run
+    // why: The same test `toolVersions` makes: the command line tools' `xcodebuild` refuses to run
     // without Xcode. Any other failure is something this check cannot read, so it says nothing.
     if (/requires Xcode/.test(version.stderr)) return [XCODE];
     throw new Error(`xcodebuild -version exited with ${String(version.code)}`);
@@ -62,7 +62,7 @@ async function missingIosPrerequisites(
 }
 
 /**
- * One bounded `xcodebuild` run. A `null` exit code means a signal ended the process, which is
+ * why: One bounded `xcodebuild` run. A `null` exit code means a signal ended the process, which is
  * how the runner ends one that ran out of time: that is "could not tell", not "missing".
  */
 async function xcodebuild(

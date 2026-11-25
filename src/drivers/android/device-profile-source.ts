@@ -11,7 +11,7 @@ export type DeviceProfile =
       readonly names: readonly string[];
       readonly avdmanagerId: string;
       readonly custom: boolean;
-      /** From the entry's `Tag :` line (ADR 0015 §3); `undefined` for a tag the table does not know. */
+      /** why: From the entry's `Tag :` line (ADR 0015 §3); `undefined` for a tag the table does not know. */
       readonly deviceClass: DeviceClass | undefined;
       readonly tag?: string | undefined;
       readonly apiRange?: ApiRange | undefined;
@@ -46,7 +46,7 @@ export type DeviceProfile =
 type ApiRange = { readonly min: number; readonly max?: number };
 
 /**
- * Diagnostics a `DeviceProfileSource` can raise. Sources never throw out of `profiles` for a
+ * why: Diagnostics a `DeviceProfileSource` can raise. Sources never throw out of `profiles` for a
  * data problem (an absent, unreadable, or malformed file is not the caller's fault) -- this is
  * the only channel for surfacing that something was ignored.
  */
@@ -57,32 +57,29 @@ export interface DeviceProfileSourceDiagnostic {
 }
 
 /**
- * A read-only place `AndroidDriver` can load device profiles from. Simlock never writes to
+ * why: A read-only place `AndroidDriver` can load device profiles from. Simlock never writes to
  * any of these locations -- see safety rule 1 -- sources only load. Implementations must
  * never throw for a missing or malformed backing store; report that through the
  * `onDiagnostic` callback they were constructed with instead, and return no profiles.
  */
 export interface DeviceProfileSource {
-  /** Every profile this source currently has, in its own order. Matching is not its job. */
   profiles(): Promise<readonly DeviceProfile[]>;
 }
 
-/** The registry's answer for the catalog: listed models, and the other names each answers to. */
 export interface DeviceProfileCatalog {
   readonly models: readonly string[];
-  /** Only models with another name appear, keyed by their spelling in `models`. */
+  /** why: Only models with another name appear, keyed by their spelling in `models`. */
   readonly modelAliases: Readonly<Record<string, readonly string[]>>;
   /**
-   * The listed models whose name resolves to a `properties` profile or a `custom` `builtin`
+   * why: The listed models whose name resolves to a `properties` profile or a `custom` `builtin`
    * one: a custom profile from this machine rather than one the SDK ships. In `models` order.
    */
   readonly customModels: readonly string[];
-  /** The class of each listed model that has one, keyed by its spelling in `models`. */
   readonly modelClasses: Readonly<Record<string, DeviceClass>>;
 }
 
 /**
- * Ordered list of sources, first match wins. This is the whole extension point: a future
+ * why: Ordered list of sources, first match wins. This is the whole extension point: a future
  * community/network source is a new `DeviceProfileSource` implementation plus one more entry
  * in the list a driver is constructed with -- nothing else in the driver changes.
  *
@@ -97,7 +94,7 @@ export class DeviceProfileRegistry {
   }
 
   /**
-   * `models` dedupes by name, case-insensitively, the earliest profile winning a collision. A
+   * why: `models` dedupes by name, case-insensitively, the earliest profile winning a collision. A
    * profile whose name an earlier profile only answers to as another name stays listed, as it
    * always has. A profile's other names are listed only where they resolve to that profile.
    */
@@ -128,7 +125,7 @@ export class DeviceProfileRegistry {
       }
     }
     const models = [...listed.values()].map((profile) => profile.name);
-    // Custom by the profile the name resolves to, not the one it was listed from: a
+    // why: Custom by the profile the name resolves to, not the one it was listed from: a
     // devices.xml name that a real SDK profile already answers to stays listed but is built-in.
     const customModels = models.filter((model) => {
       const profile = matchProfile(profiles, model);
@@ -208,12 +205,10 @@ function withDevicesXmlDetails(
   };
 }
 
-/** Made on this machine rather than shipped with the SDK. */
 function isCustom(profile: DeviceProfile): boolean {
   return profile.kind === "properties" || (profile.kind === "builtin" && profile.custom);
 }
 
-/** The first profile any of whose names is `model`, ignoring case. */
 function matchProfile(
   profiles: readonly DeviceProfile[],
   model: string,
@@ -392,7 +387,7 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
   }
 
   /**
-   * Answers to its display name and, when it differs ignoring case, its avdmanager id. SDK
+   * why: Answers to its display name and, when it differs ignoring case, its avdmanager id. SDK
    * profiles come before custom ones, so a real SDK profile wins a name clash with a
    * devices.xml one whatever order `avdmanager` prints them in.
    */
@@ -419,14 +414,13 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
 export interface AvdmanagerDeviceProfile {
   readonly id: string;
   readonly name: string;
-  /** The entry's `OEM :` line, or undefined without one. `User` marks a devices.xml profile. */
+  /** why: The entry's `OEM :` line, or undefined without one. `User` marks a devices.xml profile. */
   readonly oem: string | undefined;
-  /** The entry's `Tag :` line, or undefined without one. */
   readonly tag: string | undefined;
 }
 
 /**
- * ADR 0015 §3: which avdmanager tag is which device class. No tag is a phone; a tag this table
+ * why: ADR 0015 §3: which avdmanager tag is which device class. No tag is a phone; a tag this table
  * does not know has no class.
  */
 function classOfTag(tag: string | undefined): DeviceClass | undefined {
@@ -439,7 +433,7 @@ function classOfTag(tag: string | undefined): DeviceClass | undefined {
 }
 
 /**
- * One profile per `id:` entry that has a `Name:` line. `OEM :` comes after `Name:`, so an
+ * why: One profile per `id:` entry that has a `Name:` line. `OEM :` comes after `Name:`, so an
  * entry is complete only at the next `id:` line or the end of the output.
  */
 export function parseAvdmanagerDeviceProfiles(output: string): AvdmanagerDeviceProfile[] {
@@ -483,7 +477,7 @@ export function parseAvdmanagerDeviceProfiles(output: string): AvdmanagerDeviceP
 }
 
 /**
- * Read-only parse of Android Studio's `~/.android/devices.xml` -- that file belongs to
+ * why: Read-only parse of Android Studio's `~/.android/devices.xml` -- that file belongs to
  * Android Studio; Simlock only ever reads it. Resolved profiles carry hardware properties
  * (screen resolution, density, RAM) applied to the simlock-created AVD's `config.ini`, since
  * there is no official profile store beyond `avdmanager`'s own built-ins to create the AVD
@@ -508,7 +502,6 @@ export class UserDeviceProfileSource implements DeviceProfileSource {
     this.#path = path;
   }
 
-  /** Each profile answers to its `<d:name>` only. */
   async profiles(): Promise<readonly DeviceProfile[]> {
     return (await this.#devicesXmlProfiles()).map((profile) => ({
       apiRange: profile.apiRange,
@@ -525,10 +518,10 @@ export class UserDeviceProfileSource implements DeviceProfileSource {
   async #devicesXmlProfiles(): Promise<readonly DevicesXmlProfile[]> {
     let contents: string;
     try {
-      // `exists` answers false only when the file is absent; any other failure to check (an
+      // why: `exists` answers false only when the file is absent; any other failure to check (an
       // `.android` the daemon may not search, or one that is a file) is unreadable, below.
       if (!(await this.#filesystem.exists(this.#path))) {
-        // Android Studio never having run, or never having any custom profiles, is the common
+        // why: Android Studio never having run, or never having any custom profiles, is the common
         // case, not a diagnostic-worthy one.
         return [];
       }
@@ -646,7 +639,6 @@ export function parseDevicesXml(contents: string): readonly DevicesXmlProfile[] 
   return profiles;
 }
 
-/** CR, LF, or NUL -- see the rejection check at the top of the `<d:device>` loop above. */
 export function containsForbiddenCharacter(value: string): boolean {
   // oxlint-disable-next-line no-control-regex -- NUL rejection is intentional, not an accidental control-character match.
   return /[\r\n\u0000]/.test(value);
@@ -753,7 +745,6 @@ function applyScreenProperties(
 }
 
 function applyRamProperty(deviceBlock: string, hardwareProperties: Record<string, string>): void {
-  // `<d:ram unit="GiB">2</d:ram>`: the unit is an attribute, the number is the text.
   const ram = extractElement(deviceBlock, "ram");
   if (ram === undefined) {
     return;
@@ -764,7 +755,7 @@ function applyRamProperty(deviceBlock: string, hardwareProperties: Record<string
   }
 }
 
-/** Android's standard density buckets, matching what `avdmanager`'s own built-ins resolve to. */
+/** why: Android's standard density buckets, matching what `avdmanager`'s own built-ins resolve to. */
 const DENSITY_BUCKETS_DPI: Readonly<Record<string, number>> = {
   ldpi: 120,
   mdpi: 160,
@@ -785,7 +776,6 @@ function densityToDpi(raw: string): number | undefined {
   return numeric?.[1] === undefined ? undefined : Number(numeric[1]);
 }
 
-/** Bytes per unit, for every value of the devices.xml schema's `storageUnitType`. */
 const MEBIBYTE = 1024 ** 2;
 const STORAGE_UNIT_BYTES: ReadonlyMap<string, number> = new Map([
   ["B", 1],
@@ -796,7 +786,7 @@ const STORAGE_UNIT_BYTES: ReadonlyMap<string, number> = new Map([
 ]);
 
 /**
- * The RAM in MiB, or undefined when it cannot be known: a missing or unknown unit (the schema
+ * why: The RAM in MiB, or undefined when it cannot be known: a missing or unknown unit (the schema
  * requires one), a value that is not a positive integer, or one that comes to under half a MiB
  * or past what a number counts exactly. Undefined leaves `hw.ramSize` unset rather than
  * guessing and writing a wrong size.
@@ -810,7 +800,6 @@ function ramSizeToMebibytes(text: string, unit: string | undefined): number | un
   return mebibytes > 0 && Number.isSafeInteger(mebibytes) ? mebibytes : undefined;
 }
 
-/** All top-level `<(ns:)tag>...</(ns:)tag>` blocks' inner content, in document order. */
 function extractElements(xml: string, tag: string): string[] {
   const pattern = new RegExp(
     `<(?:[\\w.-]+:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[\\w.-]+:)?${tag}>`,
@@ -825,12 +814,10 @@ function extractElements(xml: string, tag: string): string[] {
   return blocks;
 }
 
-/** The first `<(ns:)tag>...</(ns:)tag>` block's inner content, or undefined. */
 function extractText(xml: string, tag: string): string | undefined {
   return extractElement(xml, tag)?.text;
 }
 
-/** The first `<(ns:)tag attr="...">...</(ns:)tag>` element's attributes and trimmed text. */
 function extractElement(
   xml: string,
   tag: string,

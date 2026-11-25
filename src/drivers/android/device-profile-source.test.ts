@@ -62,7 +62,6 @@ describe("BuiltinDeviceProfileSource", () => {
     ]);
     const source = sdkSource(runner);
 
-    // SDK profiles first, so the User one moves after `2.7" QVGA`.
     const profiles = await source.profiles();
     expect(
       profiles.map((profile) => [profile.name, "custom" in profile && profile.custom]),
@@ -310,7 +309,6 @@ describe("parseDevicesXml", () => {
     expect(parseDevicesXml(xml)).toEqual([]);
   });
 
-  // An embedded line break is covered through UserDeviceProfileSource's diagnostic test above.
   it("rejects a device name containing a NUL byte", () => {
     const withNul =
       '<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">' +
@@ -333,8 +331,6 @@ describe("parseDevicesXml", () => {
     expect(parseDevicesXml("   \n  ")).toEqual([]);
   });
 
-  // Content that is not XML at all is covered through UserDeviceProfileSource's malformed-file
-  // diagnostic test above.
   it("throws for well-formed XML with no recognizable <devices> root", () => {
     expect(() => parseDevicesXml("<not-devices-at-all/>")).toThrow();
   });
@@ -512,7 +508,7 @@ describe("DeviceProfileRegistry", () => {
     const registry = new DeviceProfileRegistry([sdkSource(runner), user]);
 
     await expect(registry.resolve("pixel_8")).resolves.toMatchObject({ name: "Pixel 8" });
-    // A read of the malformed devices.xml would have reported it.
+    // why: A read of the malformed devices.xml would have reported it.
     expect(diagnostics).toEqual([]);
   });
 
@@ -555,7 +551,7 @@ describe("DeviceProfileRegistry", () => {
   });
 
   it("does not list another name that an earlier profile answers to", async () => {
-    // The second profile's id is the first's in other letter case, so a request for it resolves
+    // why: The second profile's id is the first's in other letter case, so a request for it resolves
     // to the first; listing it under the second would name a model the worker never gives for it.
     const runner = new ScriptedProcessRunner([
       processResult(
@@ -574,7 +570,7 @@ describe("DeviceProfileRegistry", () => {
   });
 
   it("lists a devices.xml model in customModels when avdmanager also lists it as a User profile", async () => {
-    // `avdmanager list device` reads devices.xml itself and prints each of its profiles with
+    // why: `avdmanager list device` reads devices.xml itself and prints each of its profiles with
     // `OEM : User` (seen on a real SDK, issue #236), so the built-in source returns the name too.
     const withUserProfile =
       `${pixelDevices}---------\n` +
@@ -631,7 +627,6 @@ describe("DeviceProfileRegistry", () => {
   });
 
   it("yields the built-in models and no customModels when devices.xml cannot be read or parsed", async () => {
-    // A file that exists but whose read fails, the way a file without read permission does.
     const unreadable = await filesystemWithDevicesXml(devicesXml());
     unreadable.readFile = () =>
       Promise.reject(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
@@ -650,13 +645,12 @@ describe("DeviceProfileRegistry", () => {
         customModels: [],
         models: ["Pixel 8"],
       });
-      // The source was reached and gave up, rather than never being asked.
       expect(diagnostics).toHaveLength(1);
     }
   });
 
   it("yields the built-in models and an unreadable diagnostic when checking whether devices.xml exists fails", async () => {
-    // What `NodeFilesystem.exists` does for anything but ENOENT: an `.android` the daemon may
+    // why: What `NodeFilesystem.exists` does for anything but ENOENT: an `.android` the daemon may
     // not search (EACCES), or an `.android` that is a file (ENOTDIR).
     const failures = [
       { code: "EACCES", message: `EACCES: permission denied, stat '${devicesXmlPath}'` },
@@ -687,7 +681,7 @@ describe("DeviceProfileRegistry", () => {
   });
 
   it("resolves every model in customModels to a properties profile or a custom built-in one", async () => {
-    // `pixel_8` is listed, since no earlier profile is named that, but the built-in Pixel 8
+    // why: `pixel_8` is listed, since no earlier profile is named that, but the built-in Pixel 8
     // answers to it, so it resolves to the built-in and must not be marked custom.
     // `iPhone 13 mini` is avdmanager's `OEM : User` entry; `My Custom Phone` is only in
     // devices.xml. Both are custom, by different kinds of profile.

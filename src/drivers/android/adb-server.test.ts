@@ -29,12 +29,12 @@ describe("AdbServerSupervisor.start", () => {
 
     expect(harness.runner.calls).toEqual([]);
     expect(harness.supervisor.signals).toEqual([]);
-    // Untouched: the record describes the adopted server, not the daemon that adopted it.
+    // why: Untouched: the record describes the adopted server, not the daemon that adopted it.
     await expect(harness.filesystem.readFile(recordPath)).resolves.toContain('"startedAt":17');
   });
 
   it("refuses a port whose recorded server is dead even though something answers there", async () => {
-    // The listener cannot be Simlock's -- the pid that would prove it is gone -- so this is
+    // why: The listener cannot be Simlock's -- the pid that would prove it is gone -- so this is
     // somebody else's adb server, and attaching to it is what failing closed prevents.
     const harness = await start({
       listening: true,
@@ -58,7 +58,7 @@ describe("AdbServerSupervisor.start", () => {
       port: configured,
       reason: "invalid-port",
     });
-    // A probe answers `false` for a port nothing could listen on, which would read as
+    // why: A probe answers `false` for a port nothing could listen on, which would read as
     // "free" and hand an impossible port to a spawn that cannot work.
     expect(isListening).not.toHaveBeenCalled();
   });
@@ -154,7 +154,7 @@ describe("AdbServerSupervisor.start", () => {
       record: { pid: recordedPid, port, startedAt: 1 },
       spawnStartsListening: true,
     });
-    // Dies only on the second signal, which is the case the escalation exists for.
+    // why: Dies only on the second signal, which is the case the escalation exists for.
     harness.supervisor.onSignal = (pid, signal) => {
       if (signal === "SIGKILL") harness.supervisor.markDead(pid);
     };
@@ -202,14 +202,13 @@ describe("AdbServerSupervisor.start", () => {
 
     await harness.started;
 
-    // Straight to the spawn: no identity read, no signal, nothing to adopt.
     expect(harness.supervisor.signals).toEqual([]);
     expect(harness.supervisor.commandLineReads).toEqual([]);
     expect(harness.runner.calls).toHaveLength(1);
   });
 
   it("never signals another adb server that inherited the recorded pid", async () => {
-    // The dangerous half of the recycled-pid case: the machine's shared adb server is
+    // why: The dangerous half of the recycled-pid case: the machine's shared adb server is
     // exactly the population a recycled pid most often lands in, and `adb` alone is not
     // evidence of ownership -- `-P <our port>` and `nodaemon` are.
     const harness = await start({
@@ -228,7 +227,7 @@ describe("AdbServerSupervisor.start", () => {
   it("records the pid before waiting for the port, so a crash in that window is recoverable", async () => {
     const harness = await start({ expectations: [serverSpawn()] });
 
-    // Still waiting for the port here: a daemon that died now would otherwise leave a
+    // why: Still waiting for the port here: a daemon that died now would otherwise leave a
     // listening server with no record, which the next start can only report as `occupied`.
     await vi.waitFor(async () => {
       expect(await harness.filesystem.exists(recordPath)).toBe(true);
@@ -240,7 +239,7 @@ describe("AdbServerSupervisor.start", () => {
   });
 
   it("releases the daemon's hold on the server it starts", async () => {
-    // `adb nodaemon server` never exits, so a referenced child keeps the event loop alive
+    // why: `adb nodaemon server` never exits, so a referenced child keeps the event loop alive
     // and a daemon that has decided to stop simply never does.
     const harness = await start({ expectations: [serverSpawn()], spawnStartsListening: true });
 
@@ -256,13 +255,13 @@ describe("AdbServerSupervisor.start", () => {
       spawnStartsListening: true,
     });
 
-    // Typed, not a raw disk error: an untyped throw escapes the platform-scoped catch in
+    // why: Typed, not a raw disk error: an untyped throw escapes the platform-scoped catch in
     // discovery and takes the daemon -- iOS included -- down with Android.
     await expect(advancing(harness.clock, harness.started)).rejects.toMatchObject({
       name: "AdbServerUnavailableError",
       reason: "start-failed",
     });
-    // A server nothing recorded is a server nothing can ever reap.
+    // why: A server nothing recorded is a server nothing can ever reap.
     expect(harness.kills).toEqual(["SIGKILL"]);
   });
 
@@ -280,7 +279,7 @@ describe("AdbServerSupervisor.start", () => {
   });
 
   it("refuses when the port is served by something other than the child it spawned", async () => {
-    // Two daemons cold-start on one port, both probe it free, both spawn. This is the loser:
+    // why: Two daemons cold-start on one port, both probe it free, both spawn. This is the loser:
     // its adb printed "cannot bind" and exited, and a bare loopback probe cannot tell the
     // winner's server from its own.
     const harness = await start({ expectations: [serverSpawn()], spawnDies: true });
@@ -288,7 +287,7 @@ describe("AdbServerSupervisor.start", () => {
     await expect(advancing(harness.clock, harness.started)).rejects.toMatchObject({
       reason: "start-failed",
     });
-    // Writing one here would name a dead pid over the winner's record, and the next start
+    // why: Writing one here would name a dead pid over the winner's record, and the next start
     // would then find a listening port with a dead record and refuse Android outright.
     await expect(harness.filesystem.exists(recordPath)).resolves.toBe(false);
   });
@@ -309,7 +308,7 @@ describe("AdbServerSupervisor.stop", () => {
       spawnStartsListening: true,
     });
     await harness.started;
-    // The spawned server is the pid the record now names, and only a live one can be stopped.
+    // why: The spawned server is the pid the record now names, and only a live one can be stopped.
     harness.supervisor.markAlive(1);
     harness.supervisor.onSignal = (pid) => harness.supervisor.markDead(pid);
 
@@ -357,14 +356,13 @@ interface StartOptions {
   readonly port?: number;
   readonly probe?: FakeTcpProbe;
   readonly rawRecord?: string;
-  /** The child loses a race for the port: it exits, and the winner's server answers instead. */
   readonly spawnDies?: boolean;
   readonly record?: { readonly pid: number; readonly port: number; readonly startedAt: number };
   readonly spawnStartsListening?: boolean;
 }
 
 /**
- * Builds a supervisor and calls `start()` without awaiting it, so a test can drive the
+ * why: Builds a supervisor and calls `start()` without awaiting it, so a test can drive the
  * clock and the signals while the call is still in flight.
  */
 async function start(options: StartOptions = {}) {
@@ -398,7 +396,7 @@ async function start(options: StartOptions = {}) {
     tcpProbe: probe,
   });
   const started = adbServer.start();
-  // Nothing awaits a refusal until the test does, and an unobserved rejection in the
+  // why: Nothing awaits a refusal until the test does, and an unobserved rejection in the
   // meantime is noise vitest reports as a failure.
   started.catch(() => undefined);
 
@@ -434,7 +432,7 @@ async function seedRecord(filesystem: MemoryFilesystem, options: StartOptions): 
 }
 
 /**
- * Wraps the spawned handle so the test can see what was done to it, and gives the fake
+ * why: Wraps the spawned handle so the test can see what was done to it, and gives the fake
  * process supervisor the truth the real one would have: a child that spawned is a process
  * that exists until something kills it. The supervisor asks, because a probe answering
  * "listening" proves only that *something* is serving the port.
@@ -457,7 +455,7 @@ function observeSpawns(context: {
     if (childSurvives) {
       supervisor.markAlive(handle.pid);
     }
-    // A dying child models a lost race for the port, so somebody else is serving it.
+    // why: A dying child models a lost race for the port, so somebody else is serving it.
     if (options.spawnStartsListening === true || !childSurvives) {
       probe.startListening(configuredPort);
     }
@@ -488,7 +486,6 @@ function serverSpawn(): ScriptedProcessExpectation {
 
 const ownServerCommand = `${adb} -P 5038 nodaemon server`;
 
-/** A `FakeProcessSupervisor` whose test decides what a signal does to the process. */
 class SignallingSupervisor extends FakeProcessSupervisor {
   onSignal: ((pid: number, signal: NodeJS.Signals) => void) | undefined;
 
@@ -503,7 +500,7 @@ class SignallingSupervisor extends FakeProcessSupervisor {
 }
 
 /**
- * Drives a fake clock forward until the work settles. The supervisor's waits are timer
+ * why: Drives a fake clock forward until the work settles. The supervisor's waits are timer
  * loops, so each iteration schedules its next timer only after the previous one fires --
  * a single `advance` would run one iteration and stop.
  */

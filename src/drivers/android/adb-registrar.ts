@@ -9,7 +9,7 @@ export interface AdbRegistrarOptions {
 }
 
 /**
- * Attaches an emulator to Simlock's adb server the way the emulator itself does.
+ * why: Attaches an emulator to Simlock's adb server the way the emulator itself does.
  *
  * Simlock's server runs with the emulator scanner off (`ADB_EMU=0`), because the scan's
  * lower bound is hard-coded and a server that scanned far enough to see Simlock's console
@@ -27,7 +27,7 @@ export class AdbRegistrar {
   }
 
   /**
-   * `adbPort` is the console port + 1: the host service takes the port the emulator serves
+   * why: `adbPort` is the console port + 1: the host service takes the port the emulator serves
    * adb on, not the one it serves its console on. Safe to repeat -- adb keys transports by
    * port, so re-announcing an attached emulator is a no-op.
    */
@@ -35,7 +35,7 @@ export class AdbRegistrar {
     const service = `${SERVICE_PREFIX}${adbPort}`;
     const reply = await this.#options.tcp.send(this.#options.serverPort, adbHostRequest(service));
 
-    // adb answers `OKAY`, or closes without answering at all ("we don't even need to send a
+    // why: adb answers `OKAY`, or closes without answering at all ("we don't even need to send a
     // reply" in its own source), so silence is success here rather than a timeout to report.
     if (reply.startsWith(ADB_FAIL)) {
       throw new Error(`adb refused ${service}: ${reply.slice(ADB_FAIL.length)}`);

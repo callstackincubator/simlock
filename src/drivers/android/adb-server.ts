@@ -11,18 +11,16 @@ import type {
 } from "../../ports/index.js";
 import { errorMessage } from "../../shared/index.js";
 
-/** How long a freshly spawned server gets to accept a connection before it counts as failed. */
 const START_TIMEOUT_MS = 10_000;
-/** How long a signalled server gets to disappear before the next, harder signal. */
 const STOP_TIMEOUT_MS = 5_000;
 const POLL_INTERVAL_MS = 100;
-/** Ports below this belong to the system, and 5037 is the shared server every tool finds. */
+/** why: Ports below this belong to the system, and 5037 is the shared server every tool finds. */
 const MIN_PORT = 1024;
 const MAX_PORT = 65_535;
 const SHARED_ADB_SERVER_PORT = 5037;
 
 /**
- * The scoping this server is started with. Every entry is a containment decision, and
+ * why: The scoping this server is started with. Every entry is a containment decision, and
  * three of them are load-bearing enough to state:
  *
  * - `ADB_EMU=0` turns off the emulator scanner. Without it the server sweeps
@@ -56,7 +54,7 @@ export interface AdbServerRecord {
   readonly pid: number;
   readonly port: number;
   /**
-   * When this server was started, for a human reading the file or a bug report. Nothing
+   * why: When this server was started, for a human reading the file or a bug report. Nothing
    * decides anything from it, deliberately: identity is proven from the process's command
    * line (`#identify`), and a timestamp compared against this daemon's own boot time would
    * call every correctly adopted server stale, since an adopted one always predates it.
@@ -79,7 +77,7 @@ export interface AdbServerSupervisorOptions {
   readonly adbPath: string;
   readonly clock: Clock;
   /**
-   * The environment the server is started on top of, injected rather than read from
+   * why: The environment the server is started on top of, injected rather than read from
    * `process.env` here: `ProcessRunner` replaces a child's environment wholesale instead of
    * merging into it, so an adb started from `SCOPED_ENVIRONMENT` alone would lose `PATH`,
    * `HOME`, and `ANDROID_HOME` with it.
@@ -91,13 +89,12 @@ export interface AdbServerSupervisorOptions {
   readonly port: number;
   readonly processRunner: ProcessRunner;
   readonly processSupervisor: ProcessSupervisor;
-  /** `${SIMLOCK_HOME}/adb-server.json`. */
   readonly recordPath: string;
   readonly tcpProbe: TcpProbe;
 }
 
 /**
- * Owns the private adb server Android containment is built on (ADR 0001, decision 4):
+ * why: Owns the private adb server Android containment is built on (ADR 0001, decision 4):
  * starts one, adopts the one a previous daemon left behind, and reaps it on shutdown.
  *
  * Every ambiguous case fails closed. Attaching to whatever happens to be listening would
@@ -114,7 +111,7 @@ export class AdbServerSupervisor {
   }
 
   async start(): Promise<void> {
-    // Before the probe rather than after it: `NodeTcpProbe` answers `false` for a port
+    // why: Before the probe rather than after it: `NodeTcpProbe` answers `false` for a port
     // nothing could listen on, so an out-of-range port would otherwise read as "free" and
     // be handed to a spawn that cannot possibly work.
     this.#requireUsablePort();
@@ -122,7 +119,7 @@ export class AdbServerSupervisor {
     const record = await this.#liveRecord();
     if (await this.#options.tcpProbe.isListening(this.#options.port)) {
       if (record === undefined) {
-        // The one state with no automatic way out, so the message is the recovery
+        // why: The one state with no automatic way out, so the message is the recovery
         // documentation: `adb kill-server` is refused by design and the record file that
         // would have carried the pid is not there, which leaves the port and a human.
         throw this.#unavailable(
@@ -133,7 +130,7 @@ export class AdbServerSupervisor {
         );
       }
 
-      // Adopted: a daemon died, its server did not. The record is kept byte for byte --
+      // why: Adopted: a daemon died, its server did not. The record is kept byte for byte --
       // it is what a later reap identifies this server by, and rewriting it here would
       // replace a fact about the server with a fact about this daemon.
       this.#record = record;
@@ -141,7 +138,6 @@ export class AdbServerSupervisor {
     }
 
     if (record !== undefined) {
-      // Recorded, alive, and serving nothing: the pid is a leftover rather than a server.
       await this.#reap(record);
     }
 
@@ -179,7 +175,7 @@ export class AdbServerSupervisor {
     }
 
     if (port === SHARED_ADB_SERVER_PORT) {
-      // Starting Simlock's server there would either fail or, worse, succeed and become
+      // why: Starting Simlock's server there would either fail or, worse, succeed and become
       // *the* adb server for every tool on the machine.
       throw this.#unavailable(
         "invalid-port",
@@ -189,7 +185,7 @@ export class AdbServerSupervisor {
   }
 
   /**
-   * The recorded server, or `undefined` when the record proves nothing. A record that does
+   * why: The recorded server, or `undefined` when the record proves nothing. A record that does
    * not parse, names another port, or names a pid nothing answers for is treated as no
    * server at all -- never as something to go and kill.
    */
@@ -215,7 +211,7 @@ export class AdbServerSupervisor {
   }
 
   /**
-   * Ends the recorded process, but only once it has proven to be *this* server.
+   * why: Ends the recorded process, but only once it has proven to be *this* server.
    *
    * A pid alone identifies nothing. After a reboot or heavy pid churn the number in a
    * stale record belongs to somebody else's process, and `isAlive` says "yes" about it just
@@ -269,7 +265,7 @@ export class AdbServerSupervisor {
   }
 
   /**
-   * Matched on the raw line rather than on split arguments because an SDK path may contain
+   * why: Matched on the raw line rather than on split arguments because an SDK path may contain
    * spaces, and `ps` gives no way to tell those apart from argument separators.
    */
   #isOwnServerCommand(commandLine: string): boolean {
@@ -323,7 +319,7 @@ export class AdbServerSupervisor {
         },
       );
     } catch (error: unknown) {
-      // An `adb` that exists but cannot be executed is an Android configuration problem and
+      // why: An `adb` that exists but cannot be executed is an Android configuration problem and
       // must cost Android alone; letting it out untyped would take the daemon, and iOS with
       // it, down over it.
       throw this.#unavailable(
@@ -338,14 +334,14 @@ export class AdbServerSupervisor {
     await this.#prepareLog();
     const handle = this.#spawnServer();
 
-    // This child is meant to outlive the daemon: it is reaped by pid, never awaited, and
+    // why: This child is meant to outlive the daemon: it is reaped by pid, never awaited, and
     // `nodaemon server` never exits on its own. Left referenced it would hold the event
     // loop open forever, so a daemon that failed anywhere below would hang instead of
     // exiting.
     handle.unref();
 
     const record: AdbServerRecord = { pid: handle.pid, port: this.#options.port, startedAt };
-    // Written before the wait, not after it: everything between the spawn and a listening
+    // why: Written before the wait, not after it: everything between the spawn and a listening
     // port is a window in which this daemon can die, and without a record on disk the next
     // one finds a listening port it has no claim on, answers `occupied`, and leaves Android
     // dead until a human finds the pid.
@@ -355,7 +351,7 @@ export class AdbServerSupervisor {
         `${JSON.stringify(record, null, 2)}\n`,
       );
     } catch (error: unknown) {
-      // A server nothing can record is a server nothing can reap, so it is killed here
+      // why: A server nothing can record is a server nothing can reap, so it is killed here
       // rather than left running on the port the next start will need.
       await this.#abandon(handle);
       throw this.#unavailable(
@@ -376,7 +372,7 @@ export class AdbServerSupervisor {
   }
 
   /**
-   * Kills a server this start is giving up on, and drops its record only once the process
+   * why: Kills a server this start is giving up on, and drops its record only once the process
    * is confirmed gone -- while it might still be alive the record is the only handle
    * anything has on it. A record that has since stopped naming this pid belongs to somebody
    * else's server and is left where it is, for the same reason.
@@ -395,7 +391,7 @@ export class AdbServerSupervisor {
   async #waitForListening(startedAt: number, pid: number): Promise<boolean> {
     while (true) {
       const listening = await this.#options.tcpProbe.isListening(this.#options.port);
-      // A loopback connect proves something is serving the port, not that it is the child
+      // why: A loopback connect proves something is serving the port, not that it is the child
       // just spawned. Two daemons cold-starting on one port both probe it free and both
       // spawn; one binds, the other prints "cannot bind" and exits. Without this the loser
       // reads the winner's server as its own success and writes a record naming its own
@@ -432,7 +428,7 @@ export class AdbServerSupervisor {
     try {
       await this.#options.filesystem.rm(this.#options.recordPath);
     } catch {
-      // A record that cannot be removed is a stale file, not a reason to fail a shutdown:
+      // why: A record that cannot be removed is a stale file, not a reason to fail a shutdown:
       // the next start re-reads it, finds nothing alive behind it, and drops it then.
     }
   }
