@@ -39,8 +39,6 @@ describe("worker routes", () => {
 
     expect(list.status).toBe(200);
     expect(await list.json()).toEqual({ workers: [] });
-    // Each refusal names the operation its handler was reached through, so the body proves
-    // which route dispatched what.
     const refusals = [drain, undrain, remove];
     expect(refusals.map((response) => response.status)).toEqual([501, 501, 501]);
     expect(await Promise.all(refusals.map((response) => response.json()))).toEqual(

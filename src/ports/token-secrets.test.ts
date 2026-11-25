@@ -19,7 +19,7 @@ describe("CryptoTokenSecrets", () => {
 
     const secret = secrets.generateSecret().slice("slk_".length);
 
-    // base64url-encodes 32 raw bytes without padding: ceil(32 * 8 / 6) = 43 chars.
+    // why: base64url-encodes 32 raw bytes without padding: ceil(32 * 8 / 6) = 43 chars.
     expect(secret.length).toBeGreaterThanOrEqual(43);
     expect(secret).toMatch(/^[A-Za-z0-9_-]+$/);
   });

@@ -24,7 +24,6 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
-/** A built console as `vite build` lays it out: the page, one hashed asset, one public file. */
 async function builtConsole(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "simlock-console-"));
   roots.push(root);
@@ -41,7 +40,6 @@ async function emptyRoot(): Promise<string> {
   return root;
 }
 
-/** The real HTTP app, behind the console, with a log sink to read its request log from. */
 function harness(root: string) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -122,7 +120,6 @@ describe("withConsole", () => {
     const body = await response.text();
     expect(body).not.toContain(PAGE);
     expect(body).toBe(await direct.text());
-    // The API's own answer, so none of the console's headers.
     expect(response.headers.get("content-security-policy")).toBeNull();
   });
 
@@ -190,7 +187,6 @@ describe("withConsole", () => {
 
   it("answers 404 on the page and on files when the console is not built", async () => {
     const root = await emptyRoot();
-    // A stray file in an unbuilt root is still not served: without index.html there is no console.
     await writeFile(join(root, "favicon.svg"), "<svg/>");
     const { get } = harness(root);
 

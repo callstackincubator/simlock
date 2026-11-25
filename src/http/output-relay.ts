@@ -1,5 +1,5 @@
 /**
- * The three states one `device.exec` request's output can be in on the HTTP side, and the one
+ * why: The three states one `device.exec` request's output can be in on the HTTP side, and the one
  * place that decides what a chunk does in each (ADR 0005 §19a/§19e).
  *
  * - **Starting.** The process is running but the SSE stream has not opened yet. `relay.attach`
@@ -33,9 +33,6 @@ export interface RelayedChunk {
   readonly chunk: string;
 }
 
-/** One chunk held during the starting window, with the resolver for the promise `push`
- * handed back to its caller -- settled once this chunk is actually flushed by `attach`, or
- * released early by `drop`. */
 interface BufferedChunk {
   readonly chunk: RelayedChunk;
   readonly resolve: () => void;
@@ -46,7 +43,7 @@ export class OutputRelay {
   #deliver: ((chunk: RelayedChunk) => Promise<void>) | undefined;
   #dropped = false;
 
-  /** How many chunks are held right now. Only the starting window can be non-zero -- see the
+  /** why: How many chunks are held right now. Only the starting window can be non-zero -- see the
    * class doc for why this is not "at most one per stream" (a paused readable can still
    * deliver more than one at EOF); a test asserts on it, the route never reads it. */
   get bufferedCount(): number {
@@ -54,7 +51,7 @@ export class OutputRelay {
   }
 
   /**
-   * Returns what the delivery returned: while the stream is open that is the promise for this
+   * why: Returns what the delivery returned: while the stream is open that is the promise for this
    * chunk's write, and a caller who awaits it (the process runner, through
    * `DispatchSession.onOutput`) stops the command until the client has taken it. That is the
    * whole backpressure story on this side -- a client that opens the stream and never reads
@@ -70,8 +67,6 @@ export class OutputRelay {
     });
   }
 
-  /** The stream is open: flush what arrived before it was, in order, resolving each one's
-   * `push` promise as its write settles, then write straight through from here on. */
   attach(deliver: (chunk: RelayedChunk) => Promise<void>): void {
     if (this.#dropped) return;
     const queued = this.#buffered.splice(0);
@@ -81,7 +76,7 @@ export class OutputRelay {
     }
   }
 
-  /** The client is gone, terminally: release what is held and keep nothing further. Anything
+  /** why: The client is gone, terminally: release what is held and keep nothing further. Anything
    * still waiting on a starting-window delivery is resolved right away -- it has nowhere to
    * go, the same as a chunk arriving after this point, so its caller should not stay paused
    * waiting for a flush that is never coming. */

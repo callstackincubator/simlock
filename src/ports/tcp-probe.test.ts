@@ -7,7 +7,6 @@ import { NodeTcpProbe } from "./index.js";
 let server: Server | undefined;
 const accepted = new Set<Socket>();
 
-/** Listens on an ephemeral loopback port and reports which one it got. */
 async function listen(host: "127.0.0.1" | "::1" = "127.0.0.1"): Promise<number> {
   server = createServer();
   server.on("connection", (socket) => accepted.add(socket));
@@ -29,7 +28,7 @@ async function close(): Promise<void> {
       return;
     }
 
-    // `close` alone only stops accepting: a connection a probe opened and then abandoned
+    // why: `close` alone only stops accepting: a connection a probe opened and then abandoned
     // keeps it pending, and the `send` tests deliberately leave one lying around.
     for (const socket of accepted) socket.destroy();
     accepted.clear();
@@ -63,7 +62,7 @@ describe("NodeTcpProbe", () => {
   it.each([-1, 0.5, 70_000])(
     "reports a port nothing could listen on as free (%s)",
     async (port) => {
-      // `createConnection` throws for these before a socket exists at all, and a probe that
+      // why: `createConnection` throws for these before a socket exists at all, and a probe that
       // rejects instead of answering turns a misconfigured port into a daemon that cannot
       // even report why it will not start.
       await expect(new NodeTcpProbe().isListening(port)).resolves.toBe(false);
@@ -90,7 +89,7 @@ describe("NodeTcpProbe.send", () => {
   it("resolves empty when the peer answers nothing before the timeout", async () => {
     const port = await listen();
 
-    // The one service this carries is answered by silence, so a timeout completes the call
+    // why: The one service this carries is answered by silence, so a timeout completes the call
     // rather than failing it.
     await expect(new NodeTcpProbe().send(port, "ping", 50)).resolves.toBe("");
   });
@@ -99,7 +98,7 @@ describe("NodeTcpProbe.send", () => {
     const port = await listen();
     await close();
 
-    // A refused connection must not read like a server that answered nothing: the caller
+    // why: A refused connection must not read like a server that answered nothing: the caller
     // decides what to do about a failed registration, and cannot if both look identical.
     await expect(new NodeTcpProbe().send(port, "ping", 50)).rejects.toThrow();
   });

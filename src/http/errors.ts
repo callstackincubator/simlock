@@ -95,7 +95,7 @@ export function requestNotCancellable(
   return new HttpApiError(409, "REQUEST_NOT_CANCELLABLE", message, extra);
 }
 
-/** No core signal carries a better estimate; a fixed value is honest about that. */
+/** why: No core signal carries a better estimate; a fixed value is honest about that. */
 export const NO_CAPACITY_RETRY_AFTER_SECONDS = 5;
 
 export interface MappedError {
@@ -115,7 +115,7 @@ function tableEntry(code: SimlockErrorCode): (typeof ERROR_TABLE)[SimlockErrorCo
 }
 
 /**
- * Maps a thrown error to the response shape the issue's error table specifies. Never echoes
+ * why: Maps a thrown error to the response shape the issue's error table specifies. Never echoes
  * a stack trace; an error this function doesn't recognize collapses to 500 `INTERNAL` with a
  * generic message rather than leaking implementation detail into the response body.
  *
@@ -140,7 +140,7 @@ export function mapError(error: unknown): MappedError {
       ...(error.extra === undefined ? {} : { extra: error.extra }),
     };
   }
-  // Never sent over the wire (see `src/leasing/wait-queue.ts`) and has no `ERROR_TABLE` row of its own --
+  // why: Never sent over the wire (see `src/leasing/wait-queue.ts`) and has no `ERROR_TABLE` row of its own --
   // the tracker consumes it internally and turns it into a terminal request state, so this is
   // purely defensive: map it rather than falling through to a generic `INTERNAL` if that
   // invariant is ever wrong.
@@ -182,7 +182,6 @@ function libraryRefusal(error: unknown): HttpApiError | undefined {
     : undefined;
 }
 
-/** A `DispatchError` whose `details` are a plain object worth putting on the wire. */
 function isDetailsObject(error: unknown): error is DispatchError & {
   readonly details: Record<string, unknown>;
 } {
@@ -194,7 +193,6 @@ function isDetailsObject(error: unknown): error is DispatchError & {
   );
 }
 
-/** Writes `mapError`'s result as the standard `{"error":{...}}` body, plus `Retry-After` for NO_CAPACITY. */
 export function errorResponse(c: Context, error: unknown): Response {
   const mapped = mapError(error);
   // why: the request log step reads the code here, so it never reads a body, which on a gateway may stream from a worker.

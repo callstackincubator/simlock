@@ -11,8 +11,6 @@ describe("operator-only listing routes", () => {
   ] as const)(
     "GET /v1/leases dispatches lease.list under %s's own session and answers the handler's leases",
     async (_caller, headers, session) => {
-      // Which leases a caller may see is `lease.list`'s rule, owned and tested by the dispatcher;
-      // the route's part is to dispatch under the caller's session and return what it answers.
       const { app, dispatcher } = buildHarness();
       const leases = [makeLease({ id: "lse_1", ownerId: "tok_somebody" })];
       dispatcher.handlers["lease.list"] = () => ({ leases });
@@ -41,7 +39,6 @@ describe("operator-only listing routes", () => {
       spec: { model: "iPhone 16", platform: "ios" },
       stage: "queued",
     };
-    // `list.get`'s own role check, through the contract's real pipeline: the route adds none.
     dispatcher.handlers["list.get"] = (input, session) =>
       runDispatch("list.get", input, session, {
         handlers: {
@@ -234,7 +231,7 @@ describe("operator-only listing routes", () => {
       subscriptionId: session.manageEventSubscription(true),
     });
     const streamResponse = await app.request("/v1/events/stream", { headers: operatorAuth });
-    // `dispatch("events.subscribe", ...)` is awaited before the SSE stream opens, so it has
+    // why: `dispatch("events.subscribe", ...)` is awaited before the SSE stream opens, so it has
     // already run by the time `app.request` resolves.
     expect(dispatcher.calls.some((c) => c.operation === "events.subscribe")).toBe(true);
     const framesPromise = readSseFrames(streamResponse, 1);

@@ -43,7 +43,6 @@ export class LeaseNoticeBuffer {
     });
   }
 
-  /** Drains and clears the buffered notices for `leaseId`, for the renew response's `notices` field. */
   drain(leaseId: string): LeaseNotice[] {
     const notices = this.#buffered.get(leaseId) ?? [];
     this.#buffered.delete(leaseId);
@@ -51,7 +50,7 @@ export class LeaseNoticeBuffer {
   }
 
   /**
-   * Live feed for a lease's SSE stream: flushes whatever is already buffered first, so a
+   * why: Live feed for a lease's SSE stream: flushes whatever is already buffered first, so a
    * client that connects after a notice fired doesn't miss it, then pushes future notices.
    */
   // fallow-ignore-next-line unused-class-member -- called through the app's notice port, and by its tests through a test-* harness.

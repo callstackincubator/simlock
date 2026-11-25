@@ -2,14 +2,13 @@ import type { ProcessResult, ProcessRunner } from "./process-runner.js";
 import { windowsKillCommand } from "./process-tree-kill.js";
 
 /**
- * Liveness and signalling for a process addressed by pid rather than by a handle.
+ * why: Liveness and signalling for a process addressed by pid rather than by a handle.
  *
  * `ProcessRunner` covers processes this daemon spawned and still holds; this port covers
  * the ones it does not: a supervised child recorded on disk outlives the daemon that
  * started it, so after a crash the only thing left to ask about it is its pid.
  */
 export interface ProcessSupervisor {
-  /** True when a process with this pid exists and this user may signal it. */
   isAlive(pid: number): boolean;
   /**
    * why: best effort; a pid that is already gone is not an error. With `tree`, on Windows the
@@ -74,7 +73,7 @@ export class NodeProcessSupervisor implements ProcessSupervisor {
       process.kill(pid, 0);
       return true;
     } catch (error: unknown) {
-      // Both ESRCH (gone) and EPERM (alive, but another user's) answer "no" here, and
+      // why: Both ESRCH (gone) and EPERM (alive, but another user's) answer "no" here, and
       // deliberately so: this port exists to decide whether a recorded pid is a process
       // this daemon can still reap. One it may not signal is not that, whatever it is --
       // and reporting it alive would leave the caller waiting on a kill that can never
@@ -141,7 +140,7 @@ export interface SignalRecord {
 }
 
 /**
- * Records signals instead of sending them, and lets a test decide which pids are alive.
+ * why: Records signals instead of sending them, and lets a test decide which pids are alive.
  * Signalling deliberately does not kill anything here: whether a process dies on SIGTERM,
  * ignores it, or dies only on SIGKILL is exactly what the supervision code under test has
  * to cope with, so the test says which of those happened.
@@ -250,16 +249,16 @@ function endArgument(split: ArgumentSplit): void {
   split.current = undefined;
 }
 
-/** The pid is gone, or belongs to a user this process may not signal. */
+/** why: The pid is gone, or belongs to a user this process may not signal. */
 const NOT_ALIVE_CODES = new Set(["ESRCH", "EPERM"]);
 
 const NO_SUCH_PROCESS_CODES = new Set(["ESRCH"]);
 
-/** `process.kill` refuses anything outside a signed 32-bit integer with a `RangeError`. */
+/** why: `process.kill` refuses anything outside a signed 32-bit integer with a `RangeError`. */
 const MAX_PID = 2 ** 31 - 1;
 
 /**
- * Whether this number addresses one process at all. `process.kill` reads `0` as "every
+ * why: Whether this number addresses one process at all. `process.kill` reads `0` as "every
  * process in my group" and a negative pid as a whole group -- `-1` as every process this
  * user may signal -- so a pid read back from a corrupt record on disk could turn a
  * routine `SIGKILL` of a stale child into the end of the user's login session. Guarding

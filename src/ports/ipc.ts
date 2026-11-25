@@ -207,7 +207,6 @@ class NodeIpcListener implements IpcListener {
   }
 }
 
-/** Deterministic in-memory paired connections for application tests. */
 export class MemoryIpcTransport implements IpcConnector, IpcListenerFactory {
   readonly #listeners = new Map<string, (connection: IpcConnection) => void>();
 
@@ -248,7 +247,7 @@ export class MemoryIpcTransport implements IpcConnector, IpcListenerFactory {
 }
 
 /**
- * Adds `listener` to `listeners` and returns the unsubscribe every `on*` method on
+ * why: Adds `listener` to `listeners` and returns the unsubscribe every `on*` method on
  * `IpcConnection` hands back.
  *
  * Three lines, but written out per event per implementation it was nine copies of the same

@@ -15,7 +15,7 @@ function nodeSupervisor(): NodeProcessSupervisor {
 }
 
 /**
- * Runs a process to completion and hands back the pid it no longer occupies. `wait()` can
+ * why: Runs a process to completion and hands back the pid it no longer occupies. `wait()` can
  * settle on the stdio close that precedes the OS reaping the child, so callers still have
  * to wait for the pid itself to go.
  */
@@ -49,7 +49,7 @@ describe("NodeProcessSupervisor", () => {
   it.each([0, -1, -4242, 7.5, Number.NaN, 2 ** 31])(
     "reports a pid that addresses no single process as not alive (%s)",
     (pid) => {
-      // `process.kill(0, ...)` signals this daemon's whole process group and `-1` every
+      // why: `process.kill(0, ...)` signals this daemon's whole process group and `-1` every
       // process the user owns, so a pid read back from a corrupt record on disk must never
       // reach it. Answering "alive" is what would send the caller looking for it with a
       // SIGKILL.

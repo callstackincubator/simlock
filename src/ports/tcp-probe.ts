@@ -3,7 +3,7 @@ import { createConnection, type Socket } from "node:net";
 import type { LoopbackHost } from "./tcp-stream.js";
 
 /**
- * Asks whether a loopback port is in use. Simlock needs this to decide whether the port
+ * why: Asks whether a loopback port is in use. Simlock needs this to decide whether the port
  * it wants for its own server is already taken, which is a fail-closed decision rather
  * than a diagnostic one -- see ADR 0001.
  */
@@ -11,7 +11,7 @@ export interface TcpProbe {
   /** why: true when something is accepting connections on `<host>:<port>` right now; the host is `127.0.0.1` unless named. */
   isListening(port: number, timeoutMs?: number, host?: LoopbackHost): Promise<boolean>;
   /**
-   * Writes `payload` to `127.0.0.1:<port>` and resolves with whatever came back before the
+   * why: Writes `payload` to `127.0.0.1:<port>` and resolves with whatever came back before the
    * peer closed or the timeout elapsed -- an empty string when it answered nothing.
    *
    * Deliberately dumb: what the bytes mean belongs to the caller (adb's host-service
@@ -24,7 +24,7 @@ export interface TcpProbe {
 }
 
 /**
- * Short by design: this probes loopback, where a connection either completes almost
+ * why: Short by design: this probes loopback, where a connection either completes almost
  * immediately or is not going to. It is also called in a polling loop while waiting for a
  * server to come up, so a generous timeout would slow that loop down for no information.
  */
@@ -41,7 +41,7 @@ export class NodeTcpProbe implements TcpProbe {
       try {
         socket = createConnection({ host, port });
       } catch {
-        // `createConnection` throws synchronously (`ERR_SOCKET_BAD_PORT`) for a port
+        // why: `createConnection` throws synchronously (`ERR_SOCKET_BAD_PORT`) for a port
         // outside 0-65535 or one that is not an integer. That has to answer like every
         // other failure here -- nothing is serving a port nothing can listen on -- or a
         // misconfigured port number would reject out of a call whose whole contract is to
@@ -58,7 +58,7 @@ export class NodeTcpProbe implements TcpProbe {
       socket.setTimeout(timeoutMs);
       socket.once("connect", () => settle(true));
       socket.once("timeout", () => settle(false));
-      // A refused connection is the expected answer for a free port, not a failure to
+      // why: A refused connection is the expected answer for a free port, not a failure to
       // report: everything that goes wrong here means "nothing is serving this port".
       socket.once("error", () => settle(false));
     });
@@ -95,7 +95,7 @@ export class NodeTcpProbe implements TcpProbe {
       socket.on("data", (chunk: string) => {
         received += chunk;
       });
-      // A peer that answers and then holds the connection open is the normal case for the
+      // why: A peer that answers and then holds the connection open is the normal case for the
       // one service this carries, so the timeout is a completion condition rather than a
       // failure: whatever arrived by then is the answer.
       socket.once("timeout", () => settle(() => resolve(received)));
@@ -112,7 +112,6 @@ export interface FakeSend {
 }
 
 export class FakeTcpProbe implements TcpProbe {
-  /** Every `send` this probe was asked to make, in order. */
   readonly sends: FakeSend[] = [];
   readonly #listening = new Set<string>();
   #reply = "";

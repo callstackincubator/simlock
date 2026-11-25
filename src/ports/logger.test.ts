@@ -189,7 +189,7 @@ describe("NodeFileLogSink", () => {
   it("rotates to <path>.1 once a write would exceed the cap, keeping exactly one generation", async () => {
     const directory = await tempDir();
     const path = join(directory, "daemon.log");
-    // "first\n" (6 bytes) + "second\n" (7 bytes) = 13 bytes, comfortably under the 30-byte
+    // why: "first\n" (6 bytes) + "second\n" (7 bytes) = 13 bytes, comfortably under the 30-byte
     // cap; the third write ("third-line-here\n", 17 bytes) would push the file to 30 bytes
     // exactly -- not over -- so a fourth write is what actually forces the rotation.
     const sink = new NodeFileLogSink({ path, maxBytes: 30 });

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { OutputRelay } from "./output-relay.js";
 
 /**
- * ADR 0005 §19e: output is streamed, never buffered. The one window where a chunk waits is
+ * why: ADR 0005 §19e: output is streamed, never buffered. The one window where a chunk waits is
  * between the process starting and the SSE stream opening -- of unknown length, since
  * `attach` runs inside hono's own callback -- and backpressure applies there exactly as it
  * does once streaming, which is what keeps that window's memory bounded regardless of its
@@ -31,7 +31,7 @@ describe("OutputRelay", () => {
   });
 
   it("can hold more than one chunk for the same stream at once -- this class enforces no per-stream limit", () => {
-    // Round 4 hardening note: the class doc used to claim "at most one chunk per stream ... is
+    // why: Round 4 hardening note: the class doc used to claim "at most one chunk per stream ... is
     // ever held here at once", on the theory that the process runner always pauses at the
     // first unresolved delivery. That is not what a real OS pipe does at EOF -- a paused
     // readable still drains whatever it already held as part of noticing the child exited
@@ -48,7 +48,7 @@ describe("OutputRelay", () => {
   });
 
   it("keeps nothing at all once the client is gone, however much the command writes", () => {
-    // The command deliberately keeps running after a disconnect, for up to `exec.timeoutMs`.
+    // why: The command deliberately keeps running after a disconnect, for up to `exec.timeoutMs`.
     // If its output were retained meanwhile, one request per agent token would be a
     // memory-exhaustion lever with no cap on it -- which is the same defect as buffering.
     const relay = new OutputRelay();
@@ -67,7 +67,7 @@ describe("OutputRelay", () => {
   });
 
   it("hands a delivery's promise back, so a slow client can stop the command", async () => {
-    // ADR 0005 §19e end to end: the process runner awaits what `onOutput` returns, and what
+    // why: ADR 0005 §19e end to end: the process runner awaits what `onOutput` returns, and what
     // `onOutput` returns is this. A client that opened the stream and stopped reading
     // therefore stalls the command rather than filling this process with its output.
     const relay = new OutputRelay();
@@ -92,7 +92,7 @@ describe("OutputRelay", () => {
   });
 
   it("backpressures a chunk pushed before the stream opens, not just after", async () => {
-    // `attach` runs inside hono's `streamSSE` callback, which is not guaranteed to be the very
+    // why: `attach` runs inside hono's `streamSSE` callback, which is not guaranteed to be the very
     // next turn of the event loop -- so a fast producer (`adb shell cat /dev/urandom`) that
     // writes during the starting window must stall on the first chunk exactly as it would once
     // streaming, or this window is an unbounded buffer with a different name.
@@ -104,7 +104,7 @@ describe("OutputRelay", () => {
     });
     await Promise.resolve();
     await Promise.resolve();
-    // Still held, not yet delivered -- but held as exactly one chunk's promise, not an
+    // why: Still held, not yet delivered -- but held as exactly one chunk's promise, not an
     // ever-growing array: a second push before `attach` still resolves only once flushed.
     expect(delivered).toBe(false);
     expect(relay.bufferedCount).toBe(1);
@@ -121,7 +121,7 @@ describe("OutputRelay", () => {
   });
 
   it("resolves a starting-window chunk's promise immediately if the client leaves before the stream ever opens", async () => {
-    // `drop()` must not leave a paused process runner waiting forever on a delivery that
+    // why: `drop()` must not leave a paused process runner waiting forever on a delivery that
     // `attach` will now never make -- the chunk has nowhere to go, exactly like one arriving
     // after the drop, so its caller is released rather than stalled.
     const relay = new OutputRelay();
@@ -151,8 +151,6 @@ describe("OutputRelay", () => {
     }
     expect(relay.bufferedCount).toBe(0);
 
-    // And a late `attach` -- an SSE callback that runs after the abort -- delivers nothing
-    // rather than resurrecting the stream.
     const written: string[] = [];
     relay.attach(async (chunk) => {
       written.push(chunk.chunk);

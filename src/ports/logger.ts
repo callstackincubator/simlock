@@ -15,17 +15,14 @@ export interface LogRecord {
   readonly fields?: Record<string, unknown>;
 }
 
-/** Operational (not business-event) logging port. Never `console` directly — see architecture rule 9. */
 export interface Logger {
   debug(message: string, fields?: Record<string, unknown>): void;
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
   error(message: string, fields?: Record<string, unknown>): void;
-  /** Returns a logger scoped to `module`, dot-joined with any existing scope. */
   child(module: string): Logger;
 }
 
-/** Receives one already-formatted line per record. Owns whatever storage/rotation backs it. */
 export interface LogSink {
   write(line: string): void;
 }
@@ -37,7 +34,6 @@ export interface JsonLinesLoggerOptions {
   readonly sink: LogSink;
 }
 
-/** Formats one JSON object per line and hands it to an injected {@link LogSink}. */
 export class JsonLinesLogger implements Logger {
   readonly #clock: Clock;
   readonly #level: LogLevel;
@@ -91,7 +87,6 @@ export class JsonLinesLogger implements Logger {
   }
 }
 
-/** Discards every record. Used as the default when no logger is injected. */
 export class NoopLogger implements Logger {
   debug(_message: string, _fields?: Record<string, unknown>): void {}
   info(_message: string, _fields?: Record<string, unknown>): void {}
@@ -103,7 +98,6 @@ export class NoopLogger implements Logger {
   }
 }
 
-/** In-memory sink for tests: exposes each record already parsed, never raw string fragments. */
 export class MemoryLogSink implements LogSink {
   readonly #lines: string[] = [];
 

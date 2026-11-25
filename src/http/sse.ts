@@ -3,7 +3,7 @@ import { streamSSE } from "hono/streaming";
 
 import type { Clock } from "../ports/index.js";
 
-/** ~15s per the issue spec, so idle tunnels don't close the stream. */
+/** why: ~15s per the issue spec, so idle tunnels don't close the stream. */
 const KEEPALIVE_MS = 15_000;
 
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -15,7 +15,7 @@ export interface SseEvent {
 }
 
 /**
- * One live feed. `subscribe` is called once per connection; it must invoke `send` for every
+ * why: One live feed. `subscribe` is called once per connection; it must invoke `send` for every
  * event to emit (in order) and `end` exactly once the stream should close after flushing
  * whatever `send` calls are already queued. The returned function unsubscribes.
  *
@@ -29,7 +29,7 @@ export interface SseSource {
 }
 
 /**
- * Bridges an `SseSource` to a hono SSE response. Keepalive comments and the source's own
+ * why: Bridges an `SseSource` to a hono SSE response. Keepalive comments and the source's own
  * lifetime both go through the injected `Clock` -- no `stream.sleep` (real `setTimeout` under
  * the hood) and no bare timers. Client abort unsubscribes the source and cancels the timer.
  */
@@ -39,7 +39,7 @@ export function pipeSse(c: Context, clock: Clock, source: SseSource, endsAt?: nu
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
     });
-    // `resolveDone` is idempotent on its own (a second call is a no-op), so `finish` doesn't
+    // why: `resolveDone` is idempotent on its own (a second call is a no-op), so `finish` doesn't
     // need an `ended` guard -- and deliberately has none: a terminal event's `send` and its
     // `end()` call both happen synchronously in the same source callback (e.g. `lease_lost`),
     // so a guard flipped by `end()` before the queued write actually runs would silently drop

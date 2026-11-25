@@ -2,31 +2,28 @@ import { arch, release, type } from "node:os";
 
 import type { ProcessRunner } from "./process-runner.js";
 
-/** What the machine is, as opposed to what tools it has: ADR 0008 §6's host port. */
 export interface HostSystem {
-  /** Product name of the operating system (`macOS`), or the kernel name where there is none. */
   readonly os: string;
   readonly osVersion: string;
-  /** CPU architecture as Node names it (`arm64`, `x64`). */
   readonly arch: string;
 }
 
 export interface HostInfo {
-  /** Never throws: a fact that cannot be read falls back to what `node:os` reports. */
+  /** why: Never throws: a fact that cannot be read falls back to what `node:os` reports. */
   read(): Promise<HostSystem>;
 }
 
-/** Bounds the one `sw_vers` call (architecture rule 11). It answers in milliseconds. */
+/** why: Bounds the one `sw_vers` call (architecture rule 11). It answers in milliseconds. */
 const SW_VERS_TIMEOUT_MS = 5_000;
 
 export interface NodeHostInfoOptions {
   readonly processRunner: ProcessRunner;
-  /** `process.platform`; injected so the macOS path can be tested anywhere. */
+  /** why: `process.platform`; injected so the macOS path can be tested anywhere. */
   readonly platform: NodeJS.Platform;
 }
 
 /**
- * On macOS the kernel version `node:os` reports (`24.5.0`) is not the version anyone looks for,
+ * why: On macOS the kernel version `node:os` reports (`24.5.0`) is not the version anyone looks for,
  * so the product name and version come from `sw_vers`. Everywhere else `node:os` is the answer.
  */
 export class NodeHostInfo implements HostInfo {

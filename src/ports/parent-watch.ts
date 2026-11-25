@@ -4,24 +4,24 @@
  */
 export interface ParentWatch {
   /**
-   * Starts watching `pid`. Calls `onExit` at most once, the first time the
+   * why: Starts watching `pid`. Calls `onExit` at most once, the first time the
    * process is observed to be gone.
    */
   watch(pid: number, onExit: () => void): ParentWatchHandle;
 }
 
 export interface ParentWatchHandle {
-  /** Stops watching. Safe to call more than once, and after `onExit` already fired. */
+  /** why: Stops watching. Safe to call more than once, and after `onExit` already fired. */
   stop(): void;
 }
 
-// How often NodeParentWatch polls. Fast enough that a crashed agent's holder
+// why: How often NodeParentWatch polls. Fast enough that a crashed agent's holder
 // self-terminates promptly; far below anything that would show up as CPU
 // noise for a process that otherwise just sits on an idle socket.
 const POLL_INTERVAL_MS = 2_000;
 
 /**
- * Polls `process.kill(pid, 0)` for liveness. This is deliberately not the
+ * why: Polls `process.kill(pid, 0)` for liveness. This is deliberately not the
  * mechanism the project plan calls for -- macOS `kqueue`/`EVFILT_PROC`/
  * `NOTE_EXIT`, Linux `prctl(PR_SET_PDEATHSIG)` -- because neither is
  * reachable from plain Node without a native addon, which this package does
@@ -48,7 +48,7 @@ export class NodeParentWatch implements ParentWatch {
         onExit();
       }
     }, this.intervalMs);
-    // A pending poll must never be the reason the holder process stays
+    // why: A pending poll must never be the reason the holder process stays
     // alive -- the daemon connection is what legitimately does that.
     timer.unref();
 
@@ -66,7 +66,7 @@ function isAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error: unknown) {
-    // ESRCH: no such process -- gone. Anything else (e.g. EPERM signaling a
+    // why: ESRCH: no such process -- gone. Anything else (e.g. EPERM signaling a
     // pid we don't own) means it still exists.
     return !isNoSuchProcessError(error);
   }
@@ -95,7 +95,6 @@ export class FakeParentWatch implements ParentWatch {
     };
   }
 
-  /** Test hook: simulates `pid` exiting, firing every still-active watcher registered for it. */
   exit(pid: number): void {
     for (const entry of this.#entries) {
       if (entry.pid === pid && !entry.stopped) {

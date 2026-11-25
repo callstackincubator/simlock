@@ -42,7 +42,7 @@ describe("createConnectionPair", () => {
   });
 
   it("buffers what is written before anyone is listening, then delivers it in order", async () => {
-    // A real socket buffers; this pair must too, or the uplink's very first frame is lost --
+    // why: A real socket buffers; this pair must too, or the uplink's very first frame is lost --
     // over an uplink the *gateway* speaks first, before the worker has handed the connection
     // to its own server (ADR 0005 §5).
     const [left, right] = createConnectionPair();
@@ -119,7 +119,6 @@ describe("MemoryUplinkTransport", () => {
     expect(harness.accepted[0]?.workerId).toBe("wrk_1");
     expect(harness.accepted[0]?.label).toBe("mac-mini-1");
 
-    // The two ends are wired to each other: the gateway sees what the worker writes.
     const received: string[] = [];
     harness.accepted[0]?.connection.onData((chunk) => received.push(chunk));
     await workerEnd.write("frame\n");
@@ -142,7 +141,7 @@ describe("MemoryUplinkTransport", () => {
     expect(harness.accepted).toEqual([]);
   });
 
-  // M3: `worker.rejected`'s `workerId`/`label` are "whatever the connection claimed in its
+  // why: M3: `worker.rejected`'s `workerId`/`label` are "whatever the connection claimed in its
   // headers" (ADR 0005 §22) -- a rejected dial still claims an identity, even though nothing
   // verifies it, and the gateway needs that claim passed through to report it.
   it("passes what the dial claimed to authenticate, even when it is refused", async () => {

@@ -25,7 +25,7 @@ describe("NodeHostInfo", () => {
     const processRunner = new ScriptedProcessRunner([
       {
         match: { args: [], command: "sw_vers" },
-        // Output that would parse, so only the exit code can be what turns it away.
+        // why: Output that would parse, so only the exit code can be what turns it away.
         result: { code: 1, stderr: "boom", stdout: SW_VERS_OUTPUT },
       },
     ]);
@@ -36,7 +36,7 @@ describe("NodeHostInfo", () => {
   });
 
   it("falls back to the kernel name and release when sw_vers cannot be started", async () => {
-    // No scripted invocation: the runner refuses to start it, as a spawn failure would.
+    // why: No scripted invocation: the runner refuses to start it, as a spawn failure would.
     const system = await new NodeHostInfo({
       platform: "darwin",
       processRunner: new ScriptedProcessRunner([]),
