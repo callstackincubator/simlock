@@ -14,10 +14,6 @@ const SCRIPT = join(
   "stale-refs.sh",
 );
 
-/**
- * A repo with a `base` branch holding `before`, and HEAD on a branch holding `after` on top of it. A file
- * mapped to null is deleted; a [from, to] pair under `moves` is moved with `git mv` first.
- */
 function repo(
   before: Record<string, string>,
   after: Record<string, string | null>,
@@ -55,7 +51,6 @@ function sweep(dir: string): string {
   return execFileSync("sh", [SCRIPT, "base", "HEAD"], { cwd: dir, encoding: "utf8" });
 }
 
-/** The hit lines printed under the header that starts with `header`. */
 function hitsUnder(output: string, header: string): string[] {
   const lines = output.split("\n");
   const start = lines.findIndex((l) => l.startsWith(header));

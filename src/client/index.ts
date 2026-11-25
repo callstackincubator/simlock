@@ -1,13 +1,3 @@
-/**
- * `simlock/client` (ADR 0003 §10). The one supported way for a host process to allocate
- * devices over the daemon's unix socket without spawning a command. No reconnect, no retry --
- * see `../simlock-client/client.ts`'s module comment for why.
- *
- * This module (and `simlock/admin`) is the entire public surface: everything it exports is
- * derived from `src/contract`'s zod schemas, never a core-private type
- * (`DeviceRecord`/`LeaseRecord`/`LeaseGrant`-the-core-type stay inside the daemon) -- see
- * `no-core-leak.test.ts`.
- */
 import {
   NodeIpcTransport,
   type Clock,
@@ -65,11 +55,7 @@ export { isSimlockError, SimlockError } from "../simlock-client/client.js";
  * here (ADR §10: "the split is by import path"). Use `connectSimlockAdmin` from
  * `simlock/admin` for an admin-role connection. */
 export interface ConnectSimlockOptions {
-  /** A pre-connected transport -- mainly for tests (a scripted `IpcConnection`). Exactly one of
-   * `connection`/`endpoint` must be given. */
   readonly connection?: IpcConnection;
-  /** The daemon's unix socket path. Connected via `ipc` (defaults to the real
-   * `NodeIpcTransport`) when `connection` is not given directly. */
   readonly endpoint?: string;
   readonly ipc?: IpcConnector;
   readonly principal?: string;

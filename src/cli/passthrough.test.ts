@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { spawnPassthrough } from "./passthrough.js";
 
-/** Runs the script in a child of this process's own node, the way a real tool would run. */
 function nodeCommand(script: string, env: Readonly<Record<string, string>> = {}) {
   return { args: ["-e", script], command: process.execPath, env };
 }
@@ -27,7 +26,7 @@ describe("spawnPassthrough", () => {
   signalTest(
     "reports a signalled tool the way a shell does rather than as a plain failure",
     async () => {
-      // ^C on an interactive `simlock adb shell` has to be distinguishable from the tool
+      // why: ^C on an interactive `simlock adb shell` has to be distinguishable from the tool
       // exiting 1 on its own; a fixed code would collapse the two.
       await expect(
         spawnPassthrough(nodeCommand("process.kill(process.pid, 'SIGTERM')")),
@@ -36,7 +35,7 @@ describe("spawnPassthrough", () => {
   );
 
   it("lets the daemon's scoping win over a stale value already in the environment", async () => {
-    // The merge order is the whole guarantee: a caller who exported this variable for an
+    // why: The merge order is the whole guarantee: a caller who exported this variable for an
     // earlier lease would otherwise aim the command at whichever server that names.
     process.env.ANDROID_ADB_SERVER_PORT = "5037";
 

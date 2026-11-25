@@ -7,7 +7,7 @@ import { followLog } from "./follow-log.js";
 
 const LOG = "/simlock/daemon.log";
 
-/** A filesystem that rotates the log once, from inside the next read of `trigger` -- the
+/** why: A filesystem that rotates the log once, from inside the next read of `trigger` -- the
  * narrowest window a real rotation can land in. */
 class RotatingFilesystem extends MemoryFilesystem {
   #armed: { readonly trigger: string; readonly rotate: () => Promise<void> } | undefined;

@@ -10,7 +10,6 @@ import type { Signals } from "./types.js";
 export interface FollowLogOptions {
   readonly clock: Clock;
   readonly filesystem: Filesystem;
-  /** The current log file; its one rotated generation is `<path>.1`. */
   readonly path: string;
   readonly signals: Signals;
   readonly write: (text: string) => void;
@@ -20,12 +19,10 @@ export interface FollowLogOptions {
 
 const DEFAULT_INTERVAL_MS = 250;
 const DEFAULT_TAIL_LINES = 100;
-/** Retries of the initial tail when a rotation keeps landing mid-read; past it, the last read
- * is used as it is. */
 const MAX_TAIL_ATTEMPTS = 3;
 
 /**
- * `simlock daemon logs --follow`: prints the last lines of the log, then each new complete line
+ * why: `simlock daemon logs --follow`: prints the last lines of the log, then each new complete line
  * as it is written, until `SIGINT` or `SIGTERM`. Polls through the `Filesystem` and `Clock`
  * ports rather than watching, so it behaves the same against the in-memory filesystem.
  *
@@ -45,7 +42,7 @@ export async function followLog(options: FollowLogOptions): Promise<void> {
   const write = (text: string): void => options.write(escapeControlLines(text));
   const rotatedPath = `${path}.1`;
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
-  // The tail: the rotated file, then the current one. Both reads are only trusted if the
+  // why: The tail: the rotated file, then the current one. Both reads are only trusted if the
   // rotated file is still the same one afterwards; otherwise a rotation landed in between and
   // the offset would belong to the wrong file, so the tail is read again.
   let rotatedIdentity: string | undefined;
@@ -70,13 +67,12 @@ export async function followLog(options: FollowLogOptions): Promise<void> {
     const rotatedNow = await identityOf(filesystem, rotatedPath);
     if (rotatedNow !== undefined && rotatedNow !== rotatedIdentity) {
       rotatedIdentity = rotatedNow;
-      // The old current file, now finished: everything left in it, then start the new one.
       const rest = await readFromOrEmpty(filesystem, rotatedPath, offset);
       if (rest !== "") write(rest.endsWith("\n") ? rest : `${rest}\n`);
       offset = 0;
     }
     const complete = completeLines(await readFromOrEmpty(filesystem, path, offset));
-    // A rotation between the check above and this read means `offset` was applied to the new
+    // why: A rotation between the check above and this read means `offset` was applied to the new
     // file. Drop the read; the next poll sees the rotation and reads both files correctly.
     if ((await identityOf(filesystem, rotatedPath)) !== rotatedIdentity) return;
     if (complete !== "") write(complete);
@@ -114,7 +110,6 @@ export async function followLog(options: FollowLogOptions): Promise<void> {
   });
 }
 
-/** Everything up to and including the last newline: a line still being written waits. */
 function completeLines(text: string): string {
   return text.slice(0, text.lastIndexOf("\n") + 1);
 }

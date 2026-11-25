@@ -1,5 +1,5 @@
 /**
- * Test-only (excluded from the build): reads whether a promise has settled without awaiting it.
+ * why: Test-only (excluded from the build): reads whether a promise has settled without awaiting it.
  *
  * A test that advances a fake clock past a deadline and then `await`s the promise the deadline
  * should have settled proves nothing when the timer is broken -- the `await` simply never

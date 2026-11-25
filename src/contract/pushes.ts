@@ -36,7 +36,7 @@ const progressPushSchema = z.object({
 });
 
 /**
- * ADR 0005 §19a: one chunk of a running `device.exec` command's output, keyed by the
+ * why: ADR 0005 §19a: one chunk of a running `device.exec` command's output, keyed by the
  * originating request's frame id exactly as `progress` is, so a connection with more than one
  * command in flight routes each chunk to its own call.
  *
@@ -56,7 +56,7 @@ const outputPushSchema = z.object({
 });
 
 /**
- * ADR 0005 §19a: a forwarded `device.exec`'s process now exists on the worker, keyed by the
+ * why: ADR 0005 §19a: a forwarded `device.exec`'s process now exists on the worker, keyed by the
  * originating request's frame id exactly as `output` is.
  *
  * This is the fact a transport needs to choose its response shape on, and it is the one fact a
@@ -78,7 +78,7 @@ const startedPushSchema = z.object({
 });
 
 /**
- * ADR 0010 §6: what a running `component.install` call hears, keyed by the originating
+ * why: ADR 0010 §6: what a running `component.install` call hears, keyed by the originating
  * request's frame id exactly as `progress` is. `waiting` while another install on the platform
  * runs ahead of it; `downloading` once its own install runs, with `fraction` from 0 to 1 when
  * the platform's installer printed one.

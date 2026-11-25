@@ -15,7 +15,7 @@
  * string is skipped. The daemon refuses an id with a control character or over 256 characters.
  */
 
-/** The agent tools whose session id Simlock reads, in the order they are tried. Adding a tool
+/** why: The agent tools whose session id Simlock reads, in the order they are tried. Adding a tool
  * is one row here and one test. */
 // fallow-ignore-next-line unused-export -- the spec'd public table; exported so the supported tools are readable in one place.
 export const AGENT_SESSION_VARIABLES: readonly {

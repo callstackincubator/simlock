@@ -19,7 +19,7 @@ const gh = (...args) =>
     maxBuffer: 256 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
-// GitHub's stored logs spell the escape byte as the two characters `^[`.
+// why: GitHub's stored logs spell the escape byte as the two characters `^[`.
 const ANSI = new RegExp(`(?:${String.fromCharCode(27)}|\\^\\[)\\[[0-9;]*m`, "g");
 
 const branch =

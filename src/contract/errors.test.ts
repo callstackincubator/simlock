@@ -25,7 +25,6 @@ describe("SimlockError", () => {
     });
     expect(isSimlockError(error)).toBe(true);
     if (isSimlockError(error) && error.code === "REQUESTER_ALREADY_LEASED") {
-      // Type-level assertion: this line only compiles if `details` narrowed.
       expect(error.details.existingLeaseId).toBe("lease_1");
       expect(error.details.requesterId).toBe("agent-1");
     } else {

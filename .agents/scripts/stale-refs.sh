@@ -27,8 +27,6 @@ keywords='class|interface|type|enum|struct|trait|protocol|function|func|fn|def|c
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/stale-refs.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
-# search <pathspec> <git grep options...>: git grep over the head tree, without the "<head>:"
-# prefix on each line.
 search() {
   spec=$1
   shift
@@ -36,8 +34,6 @@ search() {
   git grep -I "$@" "$head" -- $spec $exclude 2>/dev/null | sed "s#^$head:##" || true
 }
 
-# group <terms file> <lines file> <word|any> <kind> <note>: for each term, the lines that contain
-# it (as a whole word with "word"), under a header "<kind> <term> <note>", at most $max per term.
 group() {
   awk -v max="$max" -v word="$3" -v kind="$4" -v note="$5" '
     FNR == NR { terms[++n] = $0; next }
@@ -64,7 +60,7 @@ git diff "$fork" "$head" | grep '^-' | grep -v '^---' >"$tmp/removed" || true
 git diff "$fork" "$head" | grep '^+' | grep -v '^+++' >"$tmp/added" || true
 git diff "$fork" "$head" -- . ':(exclude)*.md' ':(exclude)*.mdx' | grep '^-' | grep -v '^---' >"$tmp/removed-code" || true
 
-# Deleted or moved paths. A mention may drop the root directory and the extension
+# why: Deleted or moved paths. A mention may drop the root directory and the extension
 # ("core/wait-queue" for src/core/wait-queue.ts), so the search is the last two segments without
 # the extension, or the file name without it when the path has one segment.
 git diff --name-status -M "$fork" "$head" | awk '$1 ~ /^[DR]/ { print $1, $2, $3 }' |
@@ -82,7 +78,7 @@ git diff --name-status -M "$fork" "$head" | awk '$1 ~ /^[DR]/ { print $1, $2, $3
     group "$tmp/path-term" "$tmp/path-hits" any path "$note"
   done
 
-# Names declared on a removed line and declared nowhere at the head. Only names that read as
+# why: Names declared on a removed line and declared nowhere at the head. Only names that read as
 # code (PascalCase, camelCase, snake_case): a plain word like "timers" is everywhere.
 grep -oE "(^|[^A-Za-z0-9_])($keywords)[[:space:]]+[A-Za-z_][A-Za-z0-9_]{3,}" "$tmp/removed" |
   awk '{ print $NF }' | grep -E '^[A-Z]|[a-z][A-Z]|_' | sort -u >"$tmp/names" || true

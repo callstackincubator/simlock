@@ -53,7 +53,7 @@ export interface ErrorDetailsMap {
   /** why: a missing `leaseId`, `runId` or `label` on either side counts as different, so a retry
    * that adds or drops one conflicts instead of replaying. */
   IDEMPOTENCY_CONFLICT: Record<string, never>;
-  /** `lease.request` named a `leaseId` an active lease or a waiting request already holds
+  /** why: `lease.request` named a `leaseId` an active lease or a waiting request already holds
    * (ADR 0020). The daemon stores nothing for it; a gateway can also meet it after storing the
    * request, when a worker's grant carries an ID the gateway already routes elsewhere. */
   LEASE_ID_TAKEN: { readonly leaseId: string };
@@ -89,17 +89,13 @@ export interface ErrorDetailsMap {
     readonly availableBytes: number;
   };
   LICENSE_NOT_ACCEPTED: { readonly platform: Platform; readonly componentName: string };
-  /**
-   * A component install ran out of `downloads.timeoutMs`, counted from the moment the call
-   * arrived: time spent waiting behind another download on the same platform counts too.
-   */
   DOWNLOAD_TIMEOUT: {
     readonly platform: Platform;
     readonly component: string;
     readonly timeoutMs: number;
   };
   /**
-   * ADR 0010 §4: an explicit component install under `downloads.policy: "never"`. No role and
+   * why: ADR 0010 §4: an explicit component install under `downloads.policy: "never"`. No role and
    * no operation overrides that policy, so the install never starts.
    */
   DOWNLOADS_DISABLED: { readonly policy: "never" };
@@ -177,23 +173,21 @@ export interface ErrorDetailsMap {
   SERVICE_FAILED: Record<string, never>;
   UNSUPPORTED_IN_GATEWAY_MODE: { readonly operation: string };
   /**
-   * ADR 0012 §2: the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The operation exists, this daemon
+   * why: ADR 0012 §2: the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The operation exists, this daemon
    * is a worker, and the operation only applies to a gateway's workers: `worker.drain`,
    * `worker.undrain`, `worker.remove` and `worker.install-component`. Not `UNKNOWN_REQUEST`: the
    * operation is known, it just does not apply to a single host.
    */
   UNSUPPORTED_IN_WORKER_MODE: { readonly operation: string };
-  /** ADR 0005 §8: `worker.remove` on a worker whose uplink is currently open. Carries the id
-   * so a caller can say which one without re-parsing the message. */
   WORKER_CONNECTED: { readonly workerId: string };
-  /** `worker.drain`/`worker.undrain` naming a worker the gateway has no view of. (`worker.remove`
+  /** why: `worker.drain`/`worker.undrain` naming a worker the gateway has no view of. (`worker.remove`
    * answers `{removed: false}` instead: forgetting something already forgotten is done, not an
    * error.) */
   UNKNOWN_WORKER: { readonly workerId: string };
   // why: ADR 0042 §2: `worker.update` names a worker the gateway knows but has no open uplink to.
   WORKER_NOT_CONNECTED: { readonly workerId: string };
   /**
-   * ADR 0005 §28: the worker that owns this lease (or would serve this request) has no open
+   * why: ADR 0005 §28: the worker that owns this lease (or would serve this request) has no open
    * uplink. `kind: "transport"`, because it says the same thing `DAEMON_CONNECTION_LOST` says
    * one hop further out -- the operation did not fail on its merits, the machine that would
    * decide is unreachable. Declared here now, with the rest of the closed set; #118 is what
@@ -215,12 +209,12 @@ export interface ErrorDetailsMap {
     readonly error?: string;
   };
 
-  /** ADR §7's forward-compatibility escape hatch: a code the client does not know (a newer
+  /** why: ADR §7's forward-compatibility escape hatch: a code the client does not know (a newer
    * daemon) wraps as this instead of throwing a parse failure. Never sent by a daemon this
    * version of the contract can produce -- purely a client-side wrapping target. */
   UNKNOWN_DAEMON_ERROR: { readonly code: string; readonly message: string };
 
-  /** ADR §10: the outcome `requestLease`'s `AbortSignal` surfaces for all four abort paths.
+  /** why: ADR §10: the outcome `requestLease`'s `AbortSignal` surfaces for all four abort paths.
    * Never sent by the daemon over the wire -- purely a client-side construction, the same way
    * `UNKNOWN_DAEMON_ERROR` is. Kept in the closed set (rather than a separate ad hoc class) so
    * callers can `isSimlockError(e) && e.code === "CANCELLED"` exactly like any other outcome. */
@@ -229,7 +223,7 @@ export interface ErrorDetailsMap {
 
 export type SimlockErrorCode = keyof ErrorDetailsMap;
 
-/** The subset of `SimlockErrorCode` whose `ErrorDetailsMap` entry actually declares a field --
+/** why: The subset of `SimlockErrorCode` whose `ErrorDetailsMap` entry actually declares a field --
  * i.e. every code above except the `Record<string, never>` ("no details") ones. Structural
  * assignability to `Record<string, never>`, not `keyof`: an index-signature-only type's `keyof`
  * is `string`, not `never`, so a `keyof ... extends never` test would (wrongly) call every code
@@ -360,7 +354,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 13,
     httpStatus: 409,
   },
-  // 409 like `REQUESTER_ALREADY_LEASED`, its neighbour: the request contradicts one already
+  // why: 409 like `REQUESTER_ALREADY_LEASED`, its neighbour: the request contradicts one already
   // stored. Exit 2, the "you asked the wrong thing" class -- retrying the same call never helps.
   IDEMPOTENCY_CONFLICT: {
     code: "IDEMPOTENCY_CONFLICT",
@@ -368,8 +362,6 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 2,
     httpStatus: 409,
   },
-  // 409 and exit 13 like `REQUESTER_ALREADY_LEASED`, its neighbour: the request clashes with a
-  // lease or request that is already there.
   LEASE_ID_TAKEN: {
     code: "LEASE_ID_TAKEN",
     kind: "domain",
@@ -472,7 +464,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 14,
     httpStatus: 410,
   },
-  // A device that cannot be enrolled is a fact about the device, as `RUNTIME_MISSING` is about
+  // why: A device that cannot be enrolled is a fact about the device, as `RUNTIME_MISSING` is about
   // the host: 422 and 12. A busy device passes once what holds it ends, as `NO_CAPACITY` does:
   // 409 and 11. An unknown device is the "what you named does not exist" class: 404 and 12.
   DEVICE_NOT_ENROLLABLE: {
@@ -483,7 +475,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   },
   DEVICE_BUSY: { code: "DEVICE_BUSY", kind: "domain", cliExitCode: 11, httpStatus: 409 },
   UNKNOWN_DEVICE: { code: "UNKNOWN_DEVICE", kind: "domain", cliExitCode: 12, httpStatus: 404 },
-  // Both are caller errors -- a refused verb and an unknown wrapper are things the request got
+  // why: Both are caller errors -- a refused verb and an unknown wrapper are things the request got
   // wrong, not states of the host -- so they take the usage exit code and a 4xx.
   PASSTHROUGH_REFUSED: {
     code: "PASSTHROUGH_REFUSED",
@@ -497,7 +489,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 2,
     httpStatus: 422,
   },
-  // The command ran, and ran too long: a 504 for the same reason a proxy uses one (the thing
+  // why: The command ran, and ran too long: a 504 for the same reason a proxy uses one (the thing
   // this daemon was waiting on never finished), and 10 -- the exit code the other "you ran
   // out of time" outcome (`QUEUE_TIMEOUT`) already uses -- so a script branching on "timed
   // out" does not need a second number for the second kind of wait.
@@ -517,7 +509,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 10,
     httpStatus: 504,
   },
-  // Configuration, not the caller, refuses the download: 403, and 12 with the other "this
+  // why: Configuration, not the caller, refuses the download: 403, and 12 with the other "this
   // machine cannot provide that component" outcomes (`RUNTIME_MISSING`, `INSUFFICIENT_DISK_SPACE`).
   DOWNLOADS_DISABLED: {
     code: "DOWNLOADS_DISABLED",
@@ -525,7 +517,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 12,
     httpStatus: 403,
   },
-  // A refused removal: 409, the component is not in a state that allows it. 12 for the two that
+  // why: A refused removal: 409, the component is not in a state that allows it. 12 for the two that
   // a retry does not change on its own (not Simlock's; in use until its devices are deleted),
   // 11 for the one that passes once the platform's install or removal ends, like `NO_CAPACITY`.
   COMPONENT_NOT_OWNED: {
@@ -615,7 +607,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   },
   // why: never sent over HTTP (the CLI raises it when a service manager call fails); the table needs a value.
   SERVICE_FAILED: { code: "SERVICE_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
-  // 501, not 400/503: the request was well-formed and the daemon is healthy -- this endpoint
+  // why: 501, not 400/503: the request was well-formed and the daemon is healthy -- this endpoint
   // simply does not implement that operation, which is exactly what "Not Implemented" says.
   // `cliExitCode: 2` puts it with the other "you asked the wrong thing" outcomes.
   UNSUPPORTED_IN_GATEWAY_MODE: {
@@ -624,20 +616,18 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 2,
     httpStatus: 501,
   },
-  // The same 501 and exit 2 as `UNSUPPORTED_IN_GATEWAY_MODE`, for the same reason: a
-  // well-formed request this daemon's mode does not implement.
   UNSUPPORTED_IN_WORKER_MODE: {
     code: "UNSUPPORTED_IN_WORKER_MODE",
     kind: "domain",
     cliExitCode: 2,
     httpStatus: 501,
   },
-  // 409, like every other "the resource is not in a state that allows this": the worker is
+  // why: 409, like every other "the resource is not in a state that allows this": the worker is
   // there, connected, and removing it is a contradiction rather than a missing thing. Exit 2
   // for the same reason `UNSUPPORTED_IN_GATEWAY_MODE` takes it -- the caller asked for
   // something that cannot apply, rather than hitting a state of the fleet.
   WORKER_CONNECTED: { code: "WORKER_CONNECTED", kind: "domain", cliExitCode: 2, httpStatus: 409 },
-  // Exit 12, beside `UNKNOWN_MODEL`: the "what you named does not exist" class, which a script
+  // why: Exit 12, beside `UNKNOWN_MODEL`: the "what you named does not exist" class, which a script
   // branches on differently from "the fleet is busy" or "that cannot apply here".
   UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 12, httpStatus: 404 },
   WORKER_NOT_CONNECTED: {
@@ -672,7 +662,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 1,
     httpStatus: 500,
   },
-  // Never sent over the wire (see the field comment on `ErrorDetailsMap.CANCELLED`); the
+  // why: Never sent over the wire (see the field comment on `ErrorDetailsMap.CANCELLED`); the
   // `httpStatus` follows the conventional "client closed request" code even though HTTP never
   // actually produces this error today.
   CANCELLED: { code: "CANCELLED", kind: "domain", cliExitCode: 1, httpStatus: 499 },

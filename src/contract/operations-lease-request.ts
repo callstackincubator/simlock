@@ -16,7 +16,7 @@ import {
 } from "./schemas.js";
 
 /**
- * The lease ID a requester may choose (ADR 0020 §1): ASCII, 1 to 64 characters, starting with a
+ * why: The lease ID a requester may choose (ADR 0020 §1): ASCII, 1 to 64 characters, starting with a
  * letter or digit, then letters, digits, `-` and `_`, case-sensitive. It has no `.`, so it can
  * never look like a gateway's `<worker>.<lease ID>`. The one definition: a gateway reads it too,
  * to decide which reported lease it names bare.

@@ -18,7 +18,7 @@ const SCRIPT = join(
 const HOUR = 3_600_000;
 
 /**
- * Runs the hook once for a session with an empty transcript and a one-hour time limit, from a
+ * why: Runs the hook once for a session with an empty transcript and a one-hour time limit, from a
  * saved state of `activeMs` active time and a last tool call `sinceLastCallMs` ago. The hook
  * runs under its own `sh`, in its own process group: at its hard limit it kills its parent's
  * group, which must never be the test runner.
@@ -32,7 +32,7 @@ async function call(activeMs: number, sinceLastCallMs: number) {
     stateFile,
     JSON.stringify({ activeMs, lastSeen: Date.now() - sinceLastCallMs, files: {} }),
   );
-  // The trailing `exit` keeps sh from exec-ing node, so sh stays the hook's parent.
+  // why: The trailing `exit` keeps sh from exec-ing node, so sh stays the hook's parent.
   const child = spawn(BASH, ["-c", '"$0" "$1"; exit $?', process.execPath, SCRIPT], {
     detached: true,
     env: {
@@ -69,8 +69,6 @@ describe("budget-guard time limit", () => {
   });
 });
 
-/** Runs the hook once for a tool call by sub-agent `agent` of a session whose sub-agent a1 has
- * used 2,000 input tokens, with a 1,000-token limit per agent and none for the session. */
 async function callAsAgent(agent: string, tool: string, command?: string) {
   const dir = mkdtempSync(join(tmpdir(), "budget-guard-"));
   const transcript = join(dir, "session.jsonl");

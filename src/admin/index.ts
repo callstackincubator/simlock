@@ -1,5 +1,5 @@
 /**
- * `simlock/admin` (ADR 0003 §10). Extends `simlock/client`'s agent surface with the `admin`
+ * why: `simlock/admin` (ADR 0003 §10). Extends `simlock/client`'s agent surface with the `admin`
  * rows of ADR §3's operation matrix. The split from `simlock/client` is by import path only --
  * the daemon's own role check is what actually stops an agent-role session from calling one of
  * these; nothing here enforces roles client-side beyond simply not exposing the methods.

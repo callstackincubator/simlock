@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * The web console's browser lane (`pnpm test:console`). Each Playwright worker starts its own
+ * why: The web console's browser lane (`pnpm test:console`). Each Playwright worker starts its own
  * daemon on the fake driver with HTTP enabled (see `e2e/console/fixtures.ts`), so it needs the
  * same build the end-to-end suite does, the console's included.
  */
