@@ -15,7 +15,7 @@ describe("a platform nuke", () => {
       ios: await harness.engine.request(request, { ownerId: "i", requesterId: "i" }),
     };
     const nuke = new Nuke({ executor: harness.engine, registry: harness.registry });
-    return { grants, harness, ios, nuke };
+    return { android, grants, harness, ios, nuke };
   }
 
   it("releases only the platform's leases, ends a physical lease and keeps the device, cancels waiting requests, and deletes only its devices, with a report listing only those", async () => {
@@ -23,7 +23,35 @@ describe("a platform nuke", () => {
       ["ios", "android"],
       ["android", "ios"],
     ] as const satisfies readonly (readonly [Platform, Platform])[]) {
-      const { grants, harness, nuke } = await twoPlatforms();
+      const { android, grants, harness, ios, nuke } = await twoPlatforms();
+      // why: an idle device of the other platform is the one a nuke that ignored the platform would delete; a second is deleted by another path while the nuke runs and is no part of its report.
+      const idle = async (driverDeviceId: string) => {
+        const device = await harness.registry.registerDevice({
+          driverData: { fakeDeviceId: driverDeviceId },
+          driverDeviceId,
+          provisionDuration: 0,
+          spec: { model: "Phone", osVersion: "1", physical: false, platform: other },
+        });
+        await harness.registry.transitionDevice(device.id, "ready", {
+          event: "device.ready",
+          payload: { bootDuration: 0, deviceId: device.id },
+        });
+        return device;
+      };
+      const kept = await idle("idle-kept");
+      const goneByOtherPath = await idle("idle-gone");
+      (other === "ios" ? ios : android).setManagedReality({
+        devices: ["idle-kept", "idle-gone"].map((deviceId) => ({
+          address: `${deviceId}-address`,
+          deviceId,
+          driverData: { fakeDeviceId: deviceId },
+          runState: "running" as const,
+        })),
+        processes: [],
+      });
+      harness.bus.subscribe("lease.released", () => {
+        void harness.registry.markDeviceMissing(goneByOtherPath.id, "test");
+      });
 
       const report = await nuke.run({ deleteDevices: true, platform });
 
@@ -38,6 +66,10 @@ describe("a platform nuke", () => {
           ?.state,
         platform,
       ).toBe("leased");
+      expect(
+        harness.registry.snapshot.devices.find((device) => device.id === kept.id)?.state,
+        platform,
+      ).toBe("ready");
     }
 
     const waiting = await twoPlatforms();
@@ -164,18 +196,21 @@ describe("a platform nuke and the warm pool's learned kinds", () => {
     for (const [spec, who] of [
       [request, "plain-ios"],
       [{ baseline: "checkout", platform: "ios" }, "baseline-ios"],
-      [androidRequest, "plain-android"],
     ] as const) {
       await harness.engine.release((await lease(spec, who)).lease.id, "explicit");
     }
+    // why: two Android leases held at once make the kind's count 2, which its lease rows keep.
+    const bothAndroid = [await lease(androidRequest, "a1"), await lease(androidRequest, "a2")];
+    harness.clock.advance(1);
+    for (const grant of bothAndroid) await harness.engine.release(grant.lease.id, "explicit");
     await flush();
     await harness.engine.core.passWarmPool();
     const learned = () =>
       harness.engine
         .figures()
         .targets.filter((target) => target.origin === "learned")
-        .map((target) => target.platform);
-    expect(learned().sort()).toEqual(["android", "ios", "ios"]);
+        .map((target) => `${target.platform}:${String(target.count)}`);
+    expect(learned().sort()).toEqual(["android:2", "ios:1", "ios:1"]);
 
     await new Nuke({ executor: harness.engine, registry: harness.registry }).run({
       deleteDevices: false,
@@ -183,6 +218,6 @@ describe("a platform nuke and the warm pool's learned kinds", () => {
     });
     await harness.engine.core.passWarmPool();
 
-    expect(learned()).toEqual(["android"]);
+    expect(learned()).toEqual(["android:2"]);
   });
 });
