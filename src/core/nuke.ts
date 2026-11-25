@@ -22,11 +22,14 @@ export class Nuke {
     readonly releasedLeaseIds: readonly string[];
     readonly removedBaselines: readonly string[];
   }> {
+    const { platform } = options;
     const before = this.options.registry.snapshot.devices
       .filter((device) => device.state !== "deleted")
+      .filter((device) => platform === undefined || device.spec.platform === platform)
       .map((device) => device.id);
     const { releasedLeaseIds, removedBaselines } = await this.options.executor.nuke(
       options.deleteDevices,
+      platform,
     );
     const deleted = new Set(
       this.options.registry.snapshot.devices

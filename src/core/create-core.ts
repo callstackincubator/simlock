@@ -200,8 +200,8 @@ export function createCore(options: CoreOptions): Core {
     leases: {
       beginMaintenance: () => port("leaseMaintenance").leases.beginMaintenance(),
       endMaintenance: () => port("leaseMaintenance").leases.endMaintenance(),
-      releaseAllDuringMaintenance: (reason: "killed") =>
-        port("leaseMaintenance").leases.releaseAllDuringMaintenance(reason),
+      releaseAllDuringMaintenance: (reason: "killed", platform?: Platform) =>
+        port("leaseMaintenance").leases.releaseAllDuringMaintenance(reason, platform),
     },
   };
 
