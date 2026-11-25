@@ -87,10 +87,10 @@ Arrows point from the optional to the required (architecture rule 15).
 | `no-fs-or-process` | Everything under `src/` but `ports/` uses ports, never `fs` or `child_process` |
 | `definition-is-light` | A module's or a driver's definition file imports its own module only for types or by dynamic import |
 | `auth-imports-little` | `src/auth` imports only ports and contract |
-| `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract and core, and the bus for types |
+| `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract, core and shared, and the bus for types |
 | `not-modules` | Core, leasing, drivers, gateway and contract import nothing from modules or module-registry |
 | `not-agent-device` | Core, leasing and drivers import nothing from agent-device |
-| `host-load-imports-ports-only`, `not-host-load` | host-load stands alone |
+| `host-load-imports-ports-only`, `not-host-load` | host-load stands alone, apart from shared |
 | `alerts-imports-bus-ports-core-only`, `not-alerts` | alerts imports the bus, ports and core only; only `src/daemon/main.ts` imports it |
 | `not-stream`, `stream-not-edges` | Nothing required imports stream; stream imports no frontend, gateway or driver |
 | `not-input`, `input-not-edges` | Nothing required imports input; input imports no frontend, gateway or driver |

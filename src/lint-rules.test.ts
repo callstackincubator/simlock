@@ -308,6 +308,16 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
+    "passes the CLI router, the updater and modules importing shared's index, and fails the router importing ports",
+    [
+      ["passes", "src/cli/errors.ts", "../shared/index.js"],
+      ["passes", "src/cli/errors.ts", "../agent-identity/index.js"],
+      ["fails", "src/cli/errors.ts", "../ports/index.js"],
+      ["passes", "src/updater/x.ts", "../shared/index.js"],
+      ["passes", "src/modules/x.ts", "../shared/index.js"],
+    ],
+  ],
+  [
     "fails a file inside drivers importing past the ios or android index from outside it, and passes the index",
     [
       ["fails", "src/drivers/installer-process.ts", "./ios/prerequisites.js"],
