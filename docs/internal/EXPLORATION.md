@@ -1,7 +1,8 @@
 # Exploration contract
 
 Use direct `rg` and source reads for a known symbol, path or straightforward
-lookup. Delegate only when a bounded question or module search saves context
+lookup, and `ast-grep` for a code shape ([toolchain.md, Code
+search](agent-rules/toolchain.md#code-search)). Delegate only when a bounded question or module search saves context
 or can run independently. File unfamiliarity and output length alone are
 not reasons to start a helper. Batch related questions; do not spawn one
 helper per fact. A review does not require an exploration stage.

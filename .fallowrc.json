@@ -80,6 +80,8 @@
     "pngjs",
     // The update e2e (e2e/update/update.e2e.test.ts) runs its binary as a local npm registry.
     "verdaccio",
+    // why: agents run its binary to search code (toolchain.md, Code search); no file imports it.
+    "@ast-grep/cli",
     // why: `e2e` is the runner @e2e-dev/mobile's types extend; packages/e2e lists it as a dev
     // dependency so the type check finds those types, and no file imports it.
     "e2e"

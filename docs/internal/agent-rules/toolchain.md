@@ -31,6 +31,37 @@ browser engine. Always with a spec file, in the foreground, with
 (3) Writes `docs/internal/console-redesign/current/*.png` from the fixture
 pages; it compares nothing. Open the pictures the change touched.
 
+## Code search
+
+ast-grep is a dev dependency, not on `PATH`: run it as `pnpm exec
+ast-grep`. Claude Code also loads ast-grep's two skills, from the plugin
+`.claude/settings.json` pins to one commit.
+
+| What                                      | Command                                                        |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| Find a code shape                         | `pnpm exec ast-grep run --lang ts -p '<pattern>' src`, again with `--lang tsx` for `ui/src` |
+| Find a shape a pattern cannot say         | `pnpm exec ast-grep scan --inline-rules '<YAML rule>' <paths>` |
+| What a module exports, before a new helper | `pnpm exec ast-grep outline <dir> --items exports`            |
+| A file's structure, before reading it     | `pnpm exec ast-grep outline <file>`                            |
+| How ast-grep read a pattern               | add `--debug-query=pattern`, or `=ast` for the code's tree     |
+
+A zero result proves nothing until the same pattern or rule matches a
+sample file that holds the shape, and a count is trusted only after a
+broader search (the bare call, or grep) shows what it left out. Traps,
+each measured on this repo:
+
+- A pattern matches whole nodes. `new Promise($$$)` skips `new
+  Promise<void>(…)`; match on `kind` with `has`, or write each spelling.
+- `async` and `await` are not kinds; match them with `regex`.
+- `try { $$$ } catch ($E) {}` misses `catch {}` and matches a catch that
+  holds only a comment.
+- `has` with `field: attribute` checks only an element's first JSX
+  attribute; drop `field` for a list of children.
+- `has` also sees punctuation, so `not: { has: { regex: "." } }` matches
+  no block.
+- `.ts` files parse as `ts` and `.tsx` as `tsx`; a JSX kind in a `ts` rule
+  is an error.
+
 ## Checks agents never run
 
 Hooks and CI run these. Never run them by hand, and never the tools behind

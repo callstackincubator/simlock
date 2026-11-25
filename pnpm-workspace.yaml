@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
 allowBuilds:
+  "@ast-grep/cli": true
   lefthook: true
 overrides:
   "@hono/node-server": 2.1.6
