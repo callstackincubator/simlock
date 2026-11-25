@@ -73,3 +73,56 @@ describe("a platform nuke", () => {
     ).not.toBe("deleted");
   });
 });
+
+describe("a platform nuke with --delete-devices", () => {
+  async function seededPlatforms() {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const seed = (id: string) => ({ id, kind: "seed", model: "Phone", osVersion: "1" }) as const;
+    ios.setSources([seed("ios-seed"), { ...seed("ios-orphan"), orphan: true }]);
+    android.setSources([seed("android-seed")]);
+    const harness = await createHarness({ driver: ios, drivers: [ios, android] });
+    for (const [name, spec, requesterId] of [
+      ["ios-base", request, "i"],
+      ["android-base", androidRequest, "a"],
+    ] as const) {
+      const grant = await harness.engine.request(spec, { ownerId: requesterId, requesterId });
+      await harness.engine.core.baselines.save({ leaseId: grant.lease.id, name, requesterId });
+    }
+    const nuke = new Nuke({ executor: harness.engine, registry: harness.registry });
+    const sourcesOf = async (driver: FakeDriver) =>
+      (await driver.listSources()).map((source) => source.id);
+    const baselineNames = async () =>
+      (await harness.engine.core.baselines.list()).map((entry) => entry.name);
+    return { android, baselineNames, ios, nuke, sourcesOf };
+  }
+
+  it("deletes only that platform's seeds and baselines, never an orphan, and nothing without --delete-devices", async () => {
+    const plain = await seededPlatforms();
+    const kept = {
+      android: await plain.sourcesOf(plain.android),
+      ios: await plain.sourcesOf(plain.ios),
+    };
+    expect(await plain.baselineNames()).toEqual(["android-base", "ios-base"]);
+    const none = await plain.nuke.run({ deleteDevices: false, platform: "ios" });
+    expect(none.removedBaselines).toEqual([]);
+    expect(await plain.sourcesOf(plain.ios)).toEqual(kept.ios);
+    expect(await plain.sourcesOf(plain.android)).toEqual(kept.android);
+    expect(await plain.baselineNames()).toEqual(["android-base", "ios-base"]);
+
+    const ios = await seededPlatforms();
+    const iosReport = await ios.nuke.run({ deleteDevices: true, platform: "ios" });
+    expect(iosReport.removedBaselines).toEqual(["ios-base"]);
+    expect(await ios.baselineNames()).toEqual(["android-base"]);
+    expect(await ios.sourcesOf(ios.ios)).toEqual(["ios-orphan"]);
+    expect(await ios.sourcesOf(ios.android)).toEqual(kept.android);
+
+    const android = await seededPlatforms();
+    const androidReport = await android.nuke.run({ deleteDevices: true, platform: "android" });
+    expect(androidReport.removedBaselines).toEqual(["android-base"]);
+    expect(await android.baselineNames()).toEqual(["ios-base"]);
+    expect(await android.sourcesOf(android.android)).toEqual([]);
+    expect(await android.sourcesOf(android.ios)).toEqual(kept.ios);
+  });
+});
