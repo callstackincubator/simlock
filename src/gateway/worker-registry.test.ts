@@ -6,8 +6,6 @@ import { MemoryDrainStore } from "./drain-store.js";
 import { catalogFixture, hostFixture, leaseFixture } from "./test-support.js";
 import { RETENTION_MS, GATEWAY_REQUESTER_PREFIX, registry } from "./test-worker-registry.js";
 
-/** Records every `warn` call, the same shape `service.test.ts`'s own `RecordingLogger` uses --
- * §15's warning is asserted on directly rather than only on the view it leaves behind. */
 class RecordingLogger implements Logger {
   readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
 
@@ -22,9 +20,6 @@ class RecordingLogger implements Logger {
   }
 }
 
-/** A gateway-issued lease's `requesterId` (ADR 0005 §14/§27): the fixed prefix `pruneExpired`
- * scopes its retention hold to, so a fixture built with it exercises the real branch rather than
- * one that happens to pass because no scoping exists yet. */
 function gatewayLeaseFixture(id: string, deviceId: string) {
   return { ...leaseFixture(id, deviceId), requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1` };
 }
@@ -236,7 +231,6 @@ describe("WorkerRegistry", () => {
       const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
       workers.connected("wrk_1", undefined, "0.3.0");
 
-      // Exactly equal, and then strictly above -- neither is "below".
       workers.refresh("wrk_1", { lease: { maxTtlMs: 3_600_000 } });
       workers.refresh("wrk_1", { lease: { maxTtlMs: 7_200_000 } });
 
@@ -248,9 +242,6 @@ describe("WorkerRegistry", () => {
       const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
       workers.connected("wrk_1", undefined, "0.3.0");
 
-      // No `lease` key on the snapshot: exactly what an event-driven refresh sends today
-      // (`config.get` is only read alongside the catalog), and what an incompatible or
-      // config.get-failed worker's view carries forever.
       expect(() => workers.refresh("wrk_1", { queueDepth: 1 })).not.toThrow();
 
       expect(workers.view("wrk_1")?.lease).toBeUndefined();
@@ -262,9 +253,6 @@ describe("WorkerRegistry", () => {
       const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
       workers.connected("wrk_1", undefined, "0.3.0");
 
-      // The periodic backstop tick re-reads config.get (and so `lease.maxTtlMs`) on every
-      // refresh alongside the catalog (`WorkerLink#rebuildView`) -- an unchanged report must
-      // not turn into a warning every `refreshIntervalMs`.
       workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
       workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
       workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
@@ -300,7 +288,7 @@ describe("WorkerRegistry", () => {
       protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
       version: "0.2.0",
     });
-    // ADR 0005 §31: no event at all. Not `worker.connected`, because nothing usable
+    // why: ADR 0005 §31: no event at all. Not `worker.connected`, because nothing usable
     // connected, and not `worker.rejected` either -- that uplink authenticated. The view is
     // the fact.
     expect(events).toEqual([]);
@@ -312,8 +300,6 @@ describe("WorkerRegistry", () => {
     workers.refresh("wrk_1", { host: hostFixture() });
     expect(workers.view("wrk_1")?.host).toEqual(hostFixture());
 
-    // The same machine comes back downgraded: it is never asked for status, so the host facts
-    // its earlier session reported are no longer known.
     const view = workers.incompatible(
       "wrk_1",
       undefined,
@@ -401,12 +387,10 @@ describe("WorkerRegistry", () => {
       clock.advance(5 * RETENTION_MS);
       await workers.pruneExpired();
 
-      // A device is still held on a machine nobody can reach: that is exactly what an operator
-      // must be able to see.
       expect(workers.view("wrk_1")).toBeDefined();
     });
 
-    // ADR 0005 §6/§14 (M2): the retention hold is scoped to leases *this gateway* issued. A
+    // why: ADR 0005 §6/§14 (M2): the retention hold is scoped to leases *this gateway* issued. A
     // worker's own local lease -- an agent on that machine, never routed through the gateway --
     // is none of the gateway's business to keep a view alive for.
     // H3: a registry with no `gatewayRequesterPrefix` cannot tell a gateway-issued lease apart
@@ -463,7 +447,7 @@ describe("WorkerRegistry", () => {
       expect(workers.view("wrk_1")).toBeDefined();
     });
 
-    // C1: a regression in the M1 fix above -- `pruneExpired` reused `#forget`, which also
+    // why: C1: a regression in the M1 fix above -- `pruneExpired` reused `#forget`, which also
     // cleared the drain flag. Retention is not an operator action (ADR 0005 §9: "only `undrain`
     // ends it"; §8a: the drained set is the gateway's own record, kept separate from the
     // observed view precisely so a drain outlives it). An operator who drains a machine for
@@ -503,12 +487,9 @@ describe("WorkerRegistry", () => {
       await workers.pruneExpired();
       expect(workers.view("wrk_1")).toBeUndefined();
 
-      // No view left to remove, so this is still "already forgotten" -- but the flag itself
-      // must actually clear, and the store must actually persist that.
       await expect(workers.remove("wrk_1")).resolves.toBe(false);
       await expect(store.load()).resolves.not.toContain("wrk_1");
 
-      // The real proof: a later reconnect under the same id is no longer drained.
       expect(workers.connected("wrk_1", undefined, undefined).drained).toBe(false);
     });
   });
@@ -525,7 +506,6 @@ describe("WorkerRegistry", () => {
         payload: { label: "mac-mini-1", workerId: "wrk_1" },
       });
 
-      // Idempotent: draining again is not an error and is not a second fact.
       const before = events.length;
       await workers.setDrained("wrk_1", true);
       expect(events).toHaveLength(before);
@@ -565,11 +545,9 @@ describe("WorkerRegistry", () => {
       first.workers.connected("wrk_1", undefined, undefined);
       await first.workers.setDrained("wrk_1", true);
 
-      // A second gateway, with nothing in memory and the same file.
       const second = registry({ drainStore: store });
       await second.workers.load();
 
-      // The worker has not even connected yet, and is already drained when it does.
       expect(second.workers.connected("wrk_1", undefined, undefined).drained).toBe(true);
     });
 
@@ -641,13 +619,10 @@ describe("WorkerRegistry", () => {
 
       await expect(first.workers.remove("wrk_1")).resolves.toBe(true);
 
-      // Reconnecting the same id, on the same registry, must not come back drained: the flag
-      // was cleared in memory...
       expect(first.workers.connected("wrk_1", undefined, undefined).drained).toBe(false);
       first.workers.disconnected("wrk_1");
       await first.workers.remove("wrk_1");
 
-      // ...and on disk, so a second gateway reading the same store does not resurrect it either.
       const second = registry({ drainStore: store });
       await second.workers.load();
       expect(second.workers.connected("wrk_1", undefined, undefined).drained).toBe(false);

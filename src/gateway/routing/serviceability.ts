@@ -1,8 +1,3 @@
-/**
- * The fast-fail table of ADR 0009 §4: whether a request can be served at all, asked before any
- * stage runs. It is the one place that table lives (architecture rule 10); the coordinator asks
- * it and acts on the answer, and the stages never see a request this table has rejected.
- */
 import type { Platform } from "../../contract/index.js";
 import { type DeviceClass, noPhysicalMatch } from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
@@ -35,8 +30,6 @@ export type RejectionCode =
   | "BASELINE_STALE"
   | "BAD_REQUEST";
 
-/** What a request the fleet cannot serve is told: the code and details a worker gives the same
- * request, and the `lease.rejected` reason the gateway records it under. */
 export interface Rejection {
   readonly kind: "reject";
   readonly code: RejectionCode;

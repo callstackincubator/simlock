@@ -1,5 +1,5 @@
 /**
- * One worker's uplink, from the gateway's side (ADR 0005 §5, §7, §22, §31).
+ * why: One worker's uplink, from the gateway's side (ADR 0005 §5, §7, §22, §31).
  *
  * Over the uplink the gateway is the protocol *client*: this class drives the worker's own
  * dispatcher with the same typed admin client a supervisor process uses over a unix socket
@@ -34,7 +34,7 @@ import type { WorkerGrantedDevice, WorkerRegistry } from "./worker-registry.js";
 import { errorMessage } from "../shared/index.js";
 
 /**
- * How long the gateway waits for one round trip to a worker before giving up on it.
+ * why: How long the gateway waits for one round trip to a worker before giving up on it.
  * `SimlockWire` keeps no per-call timeout of its own (ADR 0003 leaves that to the caller), so a
  * call on a half-open socket the OS has not yet reported dead can otherwise hang forever. Two
  * findings from #117's first review round share this one root cause: a hung `events.unsubscribe`
@@ -47,7 +47,7 @@ import { errorMessage } from "../shared/index.js";
 export const WORKER_CALL_TIMEOUT_MS = 10_000;
 
 /**
- * P1/C-1: how many consecutive *transport-liveness* failures are allowed before the gateway
+ * why: P1/C-1: how many consecutive *transport-liveness* failures are allowed before the gateway
  * gives up on this link and closes it -- specifically, `status.get` itself timing out, not the
  * batch of calls behind it. `runDispatch` (`dispatch.ts`) parks every operation except
  * `status.get` behind the worker's startup-readiness gate, so on a worker mid-`converge` (a
@@ -79,7 +79,7 @@ class WorkerCallTimeoutError extends Error {
   }
 }
 
-/** How the gateway turns an accepted uplink into a driven session. Injected so a test can
+/** why: How the gateway turns an accepted uplink into a driven session. Injected so a test can
  * script a worker without a `DaemonServer` behind it. */
 export type WorkerClientFactory = (
   connection: LinkConnection,
@@ -91,15 +91,12 @@ export interface WorkerLinkOptions {
   readonly registry: WorkerRegistry;
   readonly eventBus: EventBus;
   readonly clock: Clock;
-  /** The principal the gateway announces at `hello`, namespaced by its own instance id, so a
-   * worker's logs attribute what the gateway did to the gateway (ADR 0005 §27's shape). */
   readonly principal: string;
   readonly logger?: Logger;
   readonly connect?: WorkerClientFactory;
-  /** Called once, when this uplink closes for any reason. */
   readonly onClosed?: (workerId: string) => void;
   /**
-   * Whether the owning `GatewayService` still considers this link the current one for its
+   * why: Whether the owning `GatewayService` still considers this link the current one for its
    * worker id. A worker's uplink is keyed by worker id, not by link, so a reconnect that
    * replaces this link with a newer one leaves this one to close on its own time -- a stale
    * TCP path can take minutes to be reported dead (D1). Without this guard that late close
@@ -111,7 +108,7 @@ export interface WorkerLinkOptions {
   readonly isCurrentLink?: () => boolean;
 }
 
-/** The `list.get` answer narrowed to the grant shape rather than the view's device shape, which keeps `driverDeviceId`
+/** why: The `list.get` answer narrowed to the grant shape rather than the view's device shape, which keeps `driverDeviceId`
  * for the lease payload a gateway serves its holder (`GET /v1/leases/{id}`). Kept off the view,
  * in the registry beside it: see `WorkerGrantedDevice`. `list.get`'s contract also admits a
  * device without `driverDeviceId`, so one that does not parse is left out on its own rather than
@@ -130,10 +127,8 @@ export class WorkerLink {
   #unsubscribeEvents: (() => Promise<void>) | undefined;
   #closed = false;
   #refreshing = false;
-  /** The one follow-up refresh queued behind the one in flight, if any, and the promise every
-   * caller that queued it waits on. */
   #queuedRefresh: QueuedRefresh | undefined;
-  /** P1/C-1: consecutive `status.get` timeouts, reset to 0 the instant any `status.get` answers
+  /** why: P1/C-1: consecutive `status.get` timeouts, reset to 0 the instant any `status.get` answers
    * (inside `#rebuildView`) rather than only once a whole refresh completes -- see
    * `MAX_CONSECUTIVE_REFRESH_TIMEOUTS`'s comment for why liveness is judged on that one call. */
   #consecutiveRefreshTimeouts = 0;
@@ -145,7 +140,7 @@ export class WorkerLink {
     this.#logger = options.logger ?? new NoopLogger();
   }
 
-  /** `./fleet-ports.ts`'s `WorkerDispatchTarget#reachable` -- false once this link is closing or
+  /** why: `./fleet-ports.ts`'s `WorkerDispatchTarget#reachable` -- false once this link is closing or
    * closed (`close()`/`#handleClosed` both set `#closed` before anything else). Read by #118's
    * `FleetLeaseCoordinator` through that interface, which is a structural access `fallow`'s
    * audit cannot follow -- hence the ignore below. */
@@ -154,25 +149,17 @@ export class WorkerLink {
     return !this.#closed;
   }
 
-  /** C-2: the join token record id that authenticated this uplink at upgrade, or `undefined`
-   * when `authenticate` returned the bare outcome string rather than naming one. Read by
-   * `GatewayService#closeLinksForToken` so a revoked token can find every link it opened. */
   get tokenId(): string | undefined {
     return this.options.uplink.tokenId;
   }
 
-  /** `./fleet-ports.ts`'s `WorkerDispatchTarget#client` -- the gateway's own admin session on
-   * this worker, the same one `#rebuildView`'s refresh round trips use and the one #118's
-   * `FleetLeaseCoordinator` forwards every lease/exec operation through. `undefined` before
-   * `start()` has assigned it or after `close()`/`#handleClosed` has run -- neither clears
-   * `#client` itself, so this mirrors `reachable` rather than checking it separately. */
   // fallow-ignore-next-line unused-class-member -- reached only through the `WorkerDispatchTarget` interface (FleetLeaseCoordinator); the audit cannot follow a member access through that.
   client(): GatewayWorkerClient | undefined {
     return this.#closed ? undefined : this.#client;
   }
 
   /**
-   * Completes the handshake and builds the first view. Never throws: a worker that cannot be
+   * why: Completes the handshake and builds the first view. Never throws: a worker that cannot be
    * driven is a fact about the fleet, reported in its view and its log line, not an error the
    * gateway's accept path has to survive.
    */
@@ -181,7 +168,7 @@ export class WorkerLink {
     const connect = this.options.connect ?? defaultConnect;
     let client: GatewayWorkerClient;
     try {
-      // C3: bounded like every other call this class makes (see `WORKER_CALL_TIMEOUT_MS`) --
+      // why: C3: bounded like every other call this class makes (see `WORKER_CALL_TIMEOUT_MS`) --
       // `hello` is a round trip too, and a peer that completes the WebSocket upgrade with a
       // valid join token and then never answers it would otherwise hang `start()` forever,
       // holding an open socket and a slot in `#links` with no view to show for it (D2's failure
@@ -191,7 +178,7 @@ export class WorkerLink {
         "hello",
       );
     } catch (error: unknown) {
-      // A `hello` that failed for any reason other than version negotiation (see below): there
+      // why: A `hello` that failed for any reason other than version negotiation (see below): there
       // is no session to drive, so there is nothing to put in a view either.
       this.#logger.warn("Worker uplink handshake failed", {
         workerId: this.workerId,
@@ -202,12 +189,12 @@ export class WorkerLink {
     }
     this.#client = client;
 
-    // ADR 0003 §6's degraded client is how a version mismatch surfaces: `connectSimlockAdmin`
+    // why: ADR 0003 §6's degraded client is how a version mismatch surfaces: `connectSimlockAdmin`
     // keeps the connection open and every call rejects with the captured
     // `PROTOCOL_VERSION_UNSUPPORTED`, carrying both ranges. One call is therefore the probe
     // *and* the first `status.get` -- so a compatible worker pays nothing for the check.
     try {
-      // The result is deliberately discarded: this call exists to *fail* on a mismatched
+      // why: The result is deliberately discarded: this call exists to *fail* on a mismatched
       // protocol, and the view is built by the full refresh below rather than from half a
       // snapshot taken before the event subscription exists. Bounded like every other call this
       // class makes (see `WORKER_CALL_TIMEOUT_MS`): a worker that never answers `status.get` at
@@ -216,7 +203,7 @@ export class WorkerLink {
     } catch (error: unknown) {
       if (isSimlockError(error) && error.code === "PROTOCOL_VERSION_UNSUPPORTED") {
         this.#incompatible = true;
-        // ADR 0005 §31: marked `incompatible`, with both ranges, and never asked anything else.
+        // why: ADR 0005 §31: marked `incompatible`, with both ranges, and never asked anything else.
         // The uplink stays open on purpose -- the worker is running and will reconnect on its
         // own schedule after an upgrade; closing it here would just make it redial.
         this.options.registry.incompatible(
@@ -241,7 +228,7 @@ export class WorkerLink {
     }
 
     if (client.role !== "admin") {
-      // ADR 0005 §5 says the worker grants this session `admin` because it dialled the gateway
+      // why: ADR 0005 §5 says the worker grants this session `admin` because it dialled the gateway
       // named in its own config. A worker that did not is either older than #117 or
       // misconfigured; either way the gateway can read nothing useful from it, and pretending
       // otherwise would produce a view full of `FORBIDDEN`s.
@@ -254,7 +241,7 @@ export class WorkerLink {
     }
 
     this.options.registry.connected(this.workerId, this.options.uplink.label, client.daemonVersion);
-    // Subscribed before the first full refresh, not after: an event that fires while the
+    // why: Subscribed before the first full refresh, not after: an event that fires while the
     // refresh is in flight then queues another one, instead of falling in a gap between the
     // two calls. It costs one extra `status.get` per connect, which is the cheapest call the
     // worker has.
@@ -264,7 +251,7 @@ export class WorkerLink {
     try {
       this.#unsubscribeEvents = await this.#withTimeout(subscription, "events.subscribe");
     } catch (error: unknown) {
-      // H4: a `WorkerCallTimeoutError` here is not a refusal -- the worker was never asked and
+      // why: H4: a `WorkerCallTimeoutError` here is not a refusal -- the worker was never asked and
       // said no, its answer just did not arrive within `WORKER_CALL_TIMEOUT_MS`. Logging it as
       // "refused" asserts something this code cannot know: the RPC may yet land, or may already
       // have subscribed the worker on its end with no unsubscribe handle this link ever
@@ -272,7 +259,7 @@ export class WorkerLink {
       // Distinguishing the two in the log is this method's job even though neither path retries
       // the subscription itself; a refused one is covered by the tick, a late one by below.
       if (error instanceof WorkerCallTimeoutError) {
-        // #414: a worker still `starting` parks `events.subscribe` until its startup ends, and
+        // why: #414: a worker still `starting` parks `events.subscribe` until its startup ends, and
         // sends `daemon.started` before that parked call subscribes, so nothing else tells this
         // link the worker is ready. The late answer is that signal: keep the handle it carries
         // and read the worker in full, instead of leaving the `starting` view until a lease,
@@ -300,7 +287,7 @@ export class WorkerLink {
   }
 
   /**
-   * Rebuilds this worker's view. Concurrent calls coalesce into one in-flight refresh plus at
+   * why: Rebuilds this worker's view. Concurrent calls coalesce into one in-flight refresh plus at
    * most one queued follow-up: a burst of worker events (a lease granted, its device leased,
    * its capacity changed) must not become a burst of round trips, but the *last* event in a
    * burst must still be reflected.
@@ -319,14 +306,14 @@ export class WorkerLink {
     }
     this.#refreshing = true;
     try {
-      // No reset here on success: `#rebuildView` already reset `#consecutiveRefreshTimeouts` to
+      // why: No reset here on success: `#rebuildView` already reset `#consecutiveRefreshTimeouts` to
       // 0 the moment its `status.get` answered (C-1), which is a strictly earlier point than
       // this `await` ever returning -- reaching here without throwing is only possible once
       // that has already happened, which is what makes a second reset here dead code rather
       // than defense in depth.
       await this.#rebuildView(client, options.includeCatalog === true);
     } catch (error: unknown) {
-      // A refresh that fails because the uplink died needs no handling here: `onClose` has
+      // why: A refresh that fails because the uplink died needs no handling here: `onClose` has
       // already marked the view disconnected. Anything else is worth a line, and the next tick
       // will try again.
       this.#logger.debug("Worker view refresh failed", {
@@ -338,7 +325,6 @@ export class WorkerLink {
       this.#refreshing = false;
       const queued = this.#queuedRefresh;
       this.#queuedRefresh = undefined;
-      // A link on its way out refreshes nothing more; its waiters are released all the same.
       if (queued !== undefined) {
         if (this.#closed) queued.resolve();
         else void this.refresh(queued.options).then(queued.resolve);
@@ -382,7 +368,7 @@ export class WorkerLink {
     }
   }
 
-  /** The round trips one refresh makes, and what they become in the view. Split out of
+  /** why: The round trips one refresh makes, and what they become in the view. Split out of
    * `refresh` so that method is only the coalescing rule and this one is only the reads.
    * Bounded as one unit per call (D3): a worker that never answers one of these calls must not
    * latch `#refreshing` forever and freeze the view mid-flight while it still reports
@@ -402,14 +388,12 @@ export class WorkerLink {
       this.#refreshStarting(client, status, receivedAt);
       return;
     }
-    // A starting answer dropped the view's catalog, and a refresh that does not read one would
+    // why: A starting answer dropped the view's catalog, and a refresh that does not read one would
     // leave the worker without it (and so not taking requests) until the next periodic read.
     const catalogKnown = this.options.registry.view(this.workerId)?.catalog !== undefined;
     await this.#refreshRunning(client, status, receivedAt, includeCatalog || !catalogKnown);
   }
 
-  /** The rest of a refresh once `status.get` has answered, for a worker that is not starting:
-   * its devices, and with `includeCatalog` its catalog and config, then one commit of the view. */
   async #refreshRunning(
     client: GatewayWorkerClient,
     status: StatusGetOutput,
@@ -420,7 +404,7 @@ export class WorkerLink {
       Promise.all([
         client.list({ kind: "devices" }),
         includeCatalog ? client.getCatalog() : undefined,
-        // Read on the same pass as the catalog: neither changes with a lease or a device, so
+        // why: Read on the same pass as the catalog: neither changes with a lease or a device, so
         // the per-event refresh stays at the two calls that do.
         includeCatalog ? client.getConfig() : undefined,
         // why: a baseline changes with a save, a remove or a stale mark, not with a lease, so it is read with the catalog.
@@ -428,13 +412,13 @@ export class WorkerLink {
       ]),
       "view refresh",
     );
-    // H2: the same asymmetry D1 fixed in `#handleClosed`, one write later. This link's own
+    // why: H2: the same asymmetry D1 fixed in `#handleClosed`, one write later. This link's own
     // `close()`/`#handleClosed` may have run while the round trips above were in flight -- a
     // reconnect that replaced this link with a newer one, or an explicit `stop()` -- and without
     // this re-check the write below would land after the successor's own, more recent refresh,
     // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
     if (this.#superseded()) return;
-    // The leases come from `status.get` and the devices from the `list.get` after it, and a
+    // why: The leases come from `status.get` and the devices from the `list.get` after it, and a
     // worker keeps a device while a lease holds it, so a lease reported here names a device in
     // `devices` unless it ended in between. One `refresh` call commits both, so a lease is
     // never visible before its device. The view's fields come from the contract's one view
@@ -455,7 +439,7 @@ export class WorkerLink {
     });
   }
 
-  /** Whether this link has been closed or replaced by a newer one for the same worker, so what
+  /** why: Whether this link has been closed or replaced by a newer one for the same worker, so what
    * it read must not be written (H2). The one place that asks. */
   #superseded(): boolean {
     return this.#closed || (this.options.isCurrentLink?.() ?? true) === false;
@@ -476,7 +460,7 @@ export class WorkerLink {
     this.#closed = true;
     const unsubscribe = this.#unsubscribeEvents;
     this.#unsubscribeEvents = undefined;
-    // Best-effort throughout: the connection may already be gone, which is the common case
+    // why: Best-effort throughout: the connection may already be gone, which is the common case
     // here. The client and the connection are both closed -- closing the client is what tears
     // down its own bookkeeping, and closing the connection is what guarantees the socket is
     // gone even if the client never opened one (or failed on its way out).
@@ -495,7 +479,7 @@ export class WorkerLink {
 
   #handleClosed(): void {
     this.#closed = true;
-    // ADR 0005 §6: the uplink is keyed by worker id, not by this link, so a worker that
+    // why: ADR 0005 §6: the uplink is keyed by worker id, not by this link, so a worker that
     // reconnects while this link's socket is still (half-)open replaces it in the gateway's
     // bookkeeping well before the old socket is ever reported dead (D1). Marking the registry
     // disconnected here regardless would flip the *live* successor's view -- permanently,
@@ -505,9 +489,6 @@ export class WorkerLink {
     this.options.onClosed?.(this.workerId);
   }
 
-  /** Bounds one round trip to the worker (D2/D3): races `promise` against a timer and rejects
-   * with `WorkerCallTimeoutError` if the timer wins. The timer is always cancelled once
-   * `promise` settles, so a slow-but-eventually-successful call leaves nothing pending. */
   #withTimeout<Value>(promise: Promise<Value>, what: string): Promise<Value> {
     return new Promise<Value>((resolve, reject) => {
       let settled = false;
@@ -590,7 +571,7 @@ export class WorkerLink {
       return;
     }
     this.options.eventBus.republish(stamped);
-    // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
+    // why: ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
     if (changesCapacityOrLeases(envelope.event))
       void this.refresh({
         includeCatalog:
@@ -618,7 +599,7 @@ const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Which worker events make a view stale (ADR 0005 §7: "every worker event that changes capacity
+ * why: Which worker events make a view stale (ADR 0005 §7: "every worker event that changes capacity
  * or leases"). Matched by subject prefix rather than an explicit list of names: every event
  * about a lease or a device is, by construction, about something a view reports -- and a list
  * would silently miss the next one added to `EventMap`. The cost of being generous is one
@@ -645,7 +626,6 @@ const INSTALL_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 interface RefreshOptions {
-  /** Also re-read the catalog and the config, as on connect and on the periodic tick. */
   readonly includeCatalog?: boolean;
 }
 
@@ -655,8 +635,6 @@ interface QueuedRefresh {
   readonly resolve: () => void;
 }
 
-/** One queued refresh stands for every request that queued; it reads the catalog when any of
- * them asked for it, and every one of them waits on the same `done`. */
 function queueRefresh(queued: QueuedRefresh | undefined, next: RefreshOptions): QueuedRefresh {
   const options = {
     includeCatalog: queued?.options.includeCatalog === true || next.includeCatalog === true,

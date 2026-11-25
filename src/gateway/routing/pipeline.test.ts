@@ -26,7 +26,6 @@ function view(id: string): WorkerView {
   };
 }
 
-/** A rank that scores each worker from a table, so a test can state every score outright. */
 function rank(name: string, scores: Record<string, number>, settles = false): RankStage {
   return {
     appliesToPhysical: true,
@@ -66,8 +65,6 @@ describe("routing pipeline", () => {
     const abstains = rank("abstains", { wrk_a: 0, wrk_b: -3, wrk_c: 0 });
     const narrows = rank("narrows", { wrk_b: 2, wrk_c: 2 });
 
-    // `abstains` would drop wrk_b if it acted on its scores; it does not, so `narrows` still sees
-    // wrk_b and wrk_c, and the deciding stage stays `narrows` rather than `abstains`.
     expect(runStages([decides, abstains, narrows], REQUEST, workers)).toEqual({
       stage: "narrows",
       workerId: "wrk_b",
@@ -94,7 +91,6 @@ describe("routing pipeline", () => {
       stage: "settles",
       workerId: "wrk_a",
     });
-    // Control: the same pair without settling lets `later` decide.
     const keepsAll = rank("keeps-all", { wrk_a: 1, wrk_b: 1, wrk_c: 1 });
     expect(runStages([keepsAll, later], REQUEST, workers)).toEqual({
       stage: "later",
@@ -150,7 +146,6 @@ describe("routing pipeline", () => {
   });
 
   it("adds a stage to a list and removes it again without any other stage changing what it does", () => {
-    // The same three stage objects, untouched, in three lists.
     const keepsAB = only("wrk_a", "wrk_b");
     const prefersB = rank("prefers-b", { wrk_a: 1, wrk_b: 2 });
     const decides = rank("decides", { wrk_a: 1, wrk_b: 1 });
@@ -160,7 +155,7 @@ describe("routing pipeline", () => {
     const withPrefersB = [keepsAB, prefersB, decides];
     const added = runStages(withPrefersB, REQUEST, workers);
     const addedFilter = runStages([keepsAB, dropsB, prefersB, decides], REQUEST, workers);
-    // Removed from the list that just ran with it, after it ran: the shared stage objects
+    // why: Removed from the list that just ran with it, after it ran: the shared stage objects
     // must carry nothing over, so the result is the literal the list without it gives.
     const removed = runStages(
       withPrefersB.filter((stage) => stage !== prefersB),

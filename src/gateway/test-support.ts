@@ -1,5 +1,5 @@
 /**
- * Doubles the gateway's own suites share: a scripted worker (the `SimlockAdminClient` a
+ * why: Doubles the gateway's own suites share: a scripted worker (the `SimlockAdminClient` a
  * `WorkerLink` drives, with no daemon behind it) and the small fixtures every view needs.
  *
  * The scripted client is deliberately shaped like the real one -- it answers `status.get`,
@@ -52,7 +52,6 @@ const emptyPlatformCapacity = {
   warm: 0,
 };
 
-/** A worker's `host` block (ADR 0008 §5): one Mac with Xcode installed. */
 export function hostFixture(
   overrides: Partial<StatusGetOutput["host"]> = {},
 ): StatusGetOutput["host"] {
@@ -65,8 +64,6 @@ export function hostFixture(
   };
 }
 
-/** What a running daemon answers `status.get` with: every field a starting daemon leaves out is
- * present, so a test reads `statusFixture().capacity` without checking for it. */
 type RunningFields = "capacity" | "devices" | "leases" | "queueDepth";
 export type RunningStatus = StatusGetOutput & {
   [Field in RunningFields]-?: NonNullable<StatusGetOutput[Field]>;
@@ -157,11 +154,6 @@ export function physicalDeviceFixture(
   } as unknown as ReturnType<typeof deviceFixture>;
 }
 
-/**
- * A worker's catalog. An entry without `modelRuntimes` pairs each of its models with every one of
- * its runtimes -- a single worker's answer, so this is never the fleet cross product. An entry
- * without `modelAliases` lists no other names, one without `modelClasses` classes no model, and one without `classDefaults` has no class default.
- */
 export function catalogFixture(
   entries: readonly (Omit<
     PlatformCatalog,
@@ -205,7 +197,7 @@ export function grantFixture(overrides: Partial<LeaseGrant> = {}): LeaseGrant {
   };
 }
 
-/** A `NO_CAPACITY` a scripted worker refuses a forwarded `lease.request` with -- the shape
+/** why: A `NO_CAPACITY` a scripted worker refuses a forwarded `lease.request` with -- the shape
  * `FleetLeaseCoordinator` recognizes as a stale view (ADR §11), not a terminal failure. */
 export function noCapacityError(): SimlockError<"NO_CAPACITY"> {
   return new SimlockError("NO_CAPACITY", "domain", "No device capacity is currently available", {});
@@ -213,31 +205,22 @@ export function noCapacityError(): SimlockError<"NO_CAPACITY"> {
 
 type DownloadPolicy = "never" | "on-request" | "always";
 
-/** One scripted answer to a forwarded `lease.request` -- consumed FIFO from
- * `ScriptedWorkerClient#requestLeaseQueue`, oldest first, one per call. */
 export type RequestLeaseOutcome =
   | {
       readonly kind: "grant";
       readonly grant: LeaseGrant;
       readonly progress?: readonly LeaseProgressLike[];
-      /** Runs after the worker has decided to grant and before the answer reaches the gateway:
-       * what lands on the gateway while the grant is on its way. */
       readonly beforeGrant?: () => void | Promise<void>;
     }
   | {
       readonly kind: "error";
       readonly error: unknown;
-      /** P1 (round 2 review): a `NO_CAPACITY` reached *after* progress fired -- the worker's own
+      /** why: P1 (round 2 review): a `NO_CAPACITY` reached *after* progress fired -- the worker's own
        * `#evictManaged` failure path can answer this to a `noWait` waiter after already pushing
        * `provisioning`/`reclaiming`, which is a terminal failure (device work had begun), never
        * a re-queue, unlike an *immediate* `NO_CAPACITY` (no progress) that means a stale view. */
       readonly progress?: readonly LeaseProgressLike[];
     }
-  /** Never settles -- for exercising a dispatch attempt still in flight (finding 1's test: "a
-   * dispatch tick firing while a previous attempt for the same waiter is in flight"), and (C4,
-   * round 2 review) a request that is genuinely dispatched (a `progress` push fired) but then
-   * never resolves at all -- the only way to prove `request.dispatched` fired *before*
-   * settlement rather than merely alongside a grant that would have emitted it anyway. */
   | { readonly kind: "hang"; readonly progress?: readonly LeaseProgressLike[] };
 
 type LeaseProgressLike =
@@ -263,20 +246,13 @@ type ExecOutcome =
       readonly kind: "ok";
       readonly exitCode: number;
       readonly output?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
-      /** ADR 0005 §19a: the worker's own "the process now exists" push, sent before any output.
-       * Every protocol-5 worker sends it; this flag exists so a scripted outcome can model a
-       * worker that refuses *before* a process exists, which is the case that must not announce
-       * it. */
       readonly started?: boolean;
     }
   | { readonly kind: "error"; readonly error: unknown }
-  /** Never settles -- for exercising `gateway.execTimeoutMs` (P5, round 2 review): the worker
-   * never answers `device.exec` at all. With `started: true` this is the silent, long-running
-   * command of §19b/§19e -- a process that exists and has written nothing yet. */
   | { readonly kind: "hang"; readonly started?: boolean };
 
 /**
- * A `SimlockAdminClient` with only the methods a `WorkerLink` or a `FleetLeaseCoordinator`
+ * why: A `SimlockAdminClient` with only the methods a `WorkerLink` or a `FleetLeaseCoordinator`
  * actually call. Everything else rejects loudly rather than returning a plausible-looking empty
  * value: if either starts calling something new, the test that notices should be the one that
  * says so.
@@ -290,11 +266,9 @@ export class ScriptedWorkerClient {
   readonly removedBaselines: BaselineRemoveInput[] = [];
   /** why: what `baseline.list` answers; the view carries it for routing (ADR 0061 §6). */
   baselines: BaselineEntry[] = [];
-  /** What `config.get` reports; the view carries it for display (ADR 0009 §3). */
   downloadPolicy: DownloadPolicy = "on-request";
-  /** What `config.get` reports for `downloads.timeoutMs` (ADR 0010 §7). */
   downloadTimeoutMs = 20 * 60_000;
-  /** What `config.get` reports for `lease.maxTtlMs` (ADR 0005 §15) -- the routing-adjacent
+  /** why: What `config.get` reports for `lease.maxTtlMs` (ADR 0005 §15) -- the routing-adjacent
    * counterpart to `downloadPolicy` above. Defaults comfortably above every gateway cap this
    * suite's fixtures use, so a test that never sets it cannot accidentally trip the new warning;
    * a test exercising §15 sets it explicitly. `config.get` always answers with a real
@@ -304,34 +278,20 @@ export class ScriptedWorkerClient {
    * `WorkerRegistry`'s own level in `worker-registry.test.ts`, not through this fake. */
   leaseMaxTtlMs = 24 * 60 * 60_000;
   readonly calls: string[] = [];
-  /** Set to reject every call with this error -- e.g. a protocol mismatch. */
   failWith: unknown;
-  /** Set to let `events.subscribe` succeed while every other call still rejects with `failWith`,
-   * so a test can prove the gateway does not listen to a worker it marked incompatible. */
   subscribeDespiteFailure = false;
   closed = false;
-  /**
-   * Names of calls (`"status.get"`, `"list.get:devices"`, `"catalog.get"`, `"config.get"`) that
-   * should hang forever instead of answering -- for exercising `WorkerLink`'s own per-call
-   * timeout (D2/D3) rather than a rejection, which `SimlockWire` already handles fine. A call
-   * still lands in `calls` before it hangs, so a test can tell it was attempted.
-   */
   readonly hangingCalls = new Set<string>();
-  /** `status.get` calls wait on this while it is set -- `holdStatus()` sets it, and the function
-   * that returns lets every waiting and later call through. Unlike `hangingCalls`, a held call
-   * answers once released. */
   #statusHold: Promise<void> | undefined;
-  /** Makes the closure `subscribeEvents` returns hang forever instead of resolving -- the exact
+  /** why: Makes the closure `subscribeEvents` returns hang forever instead of resolving -- the exact
    * shape of D2's `events.unsubscribe` round trip that never answers. Read at call time, not
    * captured when the closure is created, so a test can flip this after the worker is already
    * connected and subscribed. */
   hangUnsubscribe = false;
   #eventListener: ((push: { event: EventEnvelope }) => void) | undefined;
 
-  /** #118: one scripted `lease.request` answer per call, oldest first. Empty when unset --
-   * `requestLeaseDefault` answers every call once this queue runs dry. */
   readonly requestLeaseQueue: RequestLeaseOutcome[] = [];
-  /** What a `lease.request` this worker was not explicitly scripted for answers with. Defaults
+  /** why: What a `lease.request` this worker was not explicitly scripted for answers with. Defaults
    * to `NO_CAPACITY`, deliberately: an un-scripted worker in a multi-worker test should refuse
    * rather than silently grant, so a routing bug that dispatches to the *wrong* worker shows up
    * as a rejection there instead of a second, unnoticed grant. */
@@ -343,7 +303,7 @@ export class ScriptedWorkerClient {
   onReleaseLease: ((leaseId: string) => void) | undefined;
   readonly execQueue: ExecOutcome[] = [];
   /**
-   * H4 (round 3 review): the `options` most recently passed to `exec` -- captured before
+   * why: H4 (round 3 review): the `options` most recently passed to `exec` -- captured before
    * `execQueue`'s own outcome is even read, so a `"hang"` outcome (whose returned promise never
    * settles) still leaves a test a way to invoke `onOutput` later by hand, simulating a worker
    * that keeps streaming output on a call the gateway has already given up awaiting.
@@ -352,19 +312,14 @@ export class ScriptedWorkerClient {
   /** why: every input a gateway forwarded to this worker, to see which fields reached it. */
   readonly execInputs: ExecInput[] = [];
   /**
-   * P4 (round 3 review): the mirror of `lastExecOptions` above, for `requestLease` -- captured
+   * why: P4 (round 3 review): the mirror of `lastExecOptions` above, for `requestLease` -- captured
    * before `requestLeaseQueue`'s own outcome is even read, so a `"hang"` outcome leaves a test a
    * way to invoke `onProgress` later by hand, simulating a worker whose still-pending
    * `lease.request` RPC pushes progress after the gateway's own `leaseRequestTimeoutMs` already
    * gave up on it.
    */
   lastRequestLeaseOptions: RequestLeaseOptions | undefined;
-  /** The input of the last `lease.request` forwarded to this worker. */
   lastRequestLeaseInput: LeaseRequestInput | undefined;
-  /**
-   * ADR 0010 §7: how this worker answers a relayed `component.install`. Defaults to `installed`
-   * with the version asked for; a test replaces it to refuse, fail, hang, or report progress.
-   */
   installComponentHandler: (
     input: ComponentInstallInput,
     options: InstallComponentOptions,
@@ -380,7 +335,6 @@ export class ScriptedWorkerClient {
     readonly daemonVersion = "0.3.0",
   ) {}
 
-  /** Delivers one event to the gateway exactly as a worker's `events.subscribe` push would. */
   pushEvent(envelope: Partial<EventEnvelope> & { readonly event: string }): void {
     this.#eventListener?.({
       event: {
@@ -399,12 +353,11 @@ export class ScriptedWorkerClient {
   }
 
   asClient(): GatewayWorkerClient {
-    // The cast is the point of this double: a `WorkerLink` only ever touches the members below,
+    // why: The cast is the point of this double: a `WorkerLink` only ever touches the members below,
     // and fabricating the other twenty would say less about what it depends on, not more.
     return this as unknown as GatewayWorkerClient;
   }
 
-  /** Holds every `status.get` until the returned function is called. */
   holdStatus(): () => void {
     let release!: () => void;
     this.#statusHold = new Promise<void>((resolve) => {
@@ -444,7 +397,7 @@ export class ScriptedWorkerClient {
     if (this.hangingCalls.has("status.get")) return new Promise<never>(() => {});
     await this.#statusHold;
     this.#throwIfFailing();
-    // Parsed through the operation's output schema, as the real client parses every answer:
+    // why: Parsed through the operation's output schema, as the real client parses every answer:
     // that parse is where the contract bounds what a worker claims (safety rule 10).
     return OPERATIONS["status.get"].output.parse(this.status);
   }
@@ -457,8 +410,6 @@ export class ScriptedWorkerClient {
     return this.devices;
   }
 
-  /** #118: `FleetLeaseCoordinator#attempt` forwards every dispatch through this, always with
-   * `noWait: true` (ADR §12) -- scripted per `requestLeaseQueue`/`requestLeaseDefault` above. */
   // fallow-ignore-next-line complexity -- one scripted outcome per branch of a real lease.request.
   async requestLease(
     input: LeaseRequestInput,
@@ -612,8 +563,6 @@ export class ScriptedWorkerClient {
   }
 }
 
-/** The rejection `connectSimlockAdmin`'s degraded client throws for every call when `hello`
- * found no overlapping protocol version (ADR 0003 §6) -- what marks a view `incompatible`. */
 export function protocolMismatchError(
   worker: { readonly min: number; readonly max: number },
   gateway: { readonly min: number; readonly max: number } = PROTOCOL_VERSION_RANGE,

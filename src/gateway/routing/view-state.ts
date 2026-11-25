@@ -1,5 +1,5 @@
 /**
- * A refusal holds while this key is unchanged, so it leaves out what changes on every read
+ * why: A refusal holds while this key is unchanged, so it leaves out what changes on every read
  * (`lastSeenAt`, `transitionAgeMs`), or the memo would never hold.
  */
 import type { WorkerView } from "../worker-registry.js";

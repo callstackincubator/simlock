@@ -15,7 +15,6 @@ const REQUEST = {
   platform: "ios" as const,
 };
 
-/** A worker that takes requests, with one catalog entry. */
 function view(id: string, entry: CatalogEntry = IOS, overrides: Partial<WorkerView> = {}) {
   return {
     capacity: statusFixture().capacity,

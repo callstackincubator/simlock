@@ -38,7 +38,6 @@ describe("matchRequest", () => {
   });
 
   it("when two models answer to a name, the first in models wins", () => {
-    // "pixel 7" is the name of one model and an alias of the other.
     const request = { model: "pixel 7", platform: "android" as const };
 
     expect(
@@ -92,9 +91,9 @@ describe("matchRequest", () => {
       runtimes: ["26.0"],
     });
 
-    // No pairing: `modelRuntimes.constructor` is inherited, not a list of runtimes.
+    // why: No pairing: `modelRuntimes.constructor` is inherited, not a list of runtimes.
     expect(matchRequest(view, { model: "constructor", platform: "ios" })).toBeUndefined();
-    // No alias: `modelAliases.constructor` is inherited, so asking for another name reads no
+    // why: No alias: `modelAliases.constructor` is inherited, so asking for another name reads no
     // alias list for the model and moves on to the next one.
     const withNext = worker({
       modelAliases: {},
@@ -169,7 +168,6 @@ describe("matchRequest", () => {
     it("does not match a worker whose models of the class pair only with runtimes outside the range", () => {
       expect(matchRequest(worker(PHONES), { ...phone, osVersion: "<18" })).toBeUndefined();
       expect(matchRequest(worker(PHONES), { ...phone, osVersion: "27.0" })).toBeUndefined();
-      // The tablet pairs with 26.0, but the class asked for is phone and no phone pairs with 19.
       expect(matchRequest(worker(PHONES), { ...phone, osVersion: "19 - 25" })).toBeUndefined();
     });
 

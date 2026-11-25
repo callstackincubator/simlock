@@ -1,9 +1,6 @@
 import type { RankStage } from "../pipeline.js";
 import { freeRunning } from "./free-running.js";
 
-/** Prefers the worker with the most free running capacity for the platform
- * (`maxRunning - running - reserved`). A worker with none scores zero, so a fleet with no free
- * slot anywhere makes this stage abstain. */
 export const freeCapacity: RankStage = {
   appliesToPhysical: false,
   kind: "rank",

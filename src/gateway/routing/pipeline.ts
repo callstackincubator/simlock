@@ -66,15 +66,9 @@ export type RoutingStage = FilterStage | RankStage;
 
 export interface StagePick {
   readonly workerId: string;
-  /** The last rank that removed a worker or, when none removed any, the last rank that decided. */
   readonly stage: string;
 }
 
-/**
- * Walks `stages` over `workers` in ascending worker id (the same order `WorkerRegistry#views`
- * returns). The pick is the first remaining worker, provided at least one rank decided; with
- * none, there is no pick.
- */
 export function runStages(
   stages: readonly RoutingStage[],
   request: RoutableRequest,

@@ -40,7 +40,6 @@ describe("warm-hit", () => {
       class: "phone" as const,
       id: "dev_p",
       physical: true,
-      // Everything else about it would make it a warm hit: it is the one thing that does not.
       servesDefaultMode: true,
       spec: { model: "iPhone 17", osVersion: "26.0", physical: true, platform: "ios" as const },
       state: "ready" as const,

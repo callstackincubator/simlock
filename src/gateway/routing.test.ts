@@ -56,8 +56,6 @@ describe("the registered warm-then-free policy", () => {
   }
 
   it("picks the worker with the most free running capacity, even when it sorts last by id", () => {
-    // wrk_a_tight has the higher maxRunning, but its running and reserved slots leave it 2 free
-    // against wrk_z_roomy's 5. The ascending-id tie-break alone would pick wrk_a_tight.
     const tight = view("wrk_a_tight", {
       capacity: withIos({ maxRunning: 10, reserved: 4, running: 4 }),
     });
@@ -86,7 +84,6 @@ describe("the registered warm-then-free policy", () => {
   });
 
   it("picks a worker with a warm device over a cold one with more free running capacity", () => {
-    // The warm worker sorts last by id and has less room, so only warm-hit can pick it.
     const cold = view("wrk_a_cold", { capacity: withIos({ maxRunning: 5 }) });
     const warm = view("wrk_z_warm", {
       capacity: withIos({ maxRunning: 1 }),
@@ -101,7 +98,6 @@ describe("the registered warm-then-free policy", () => {
   });
 
   it("does not dispatch a full request as a warm hit to a slim warm device while another worker has free capacity", () => {
-    // The slim worker sorts last and has less room, so only a warm hit could pick it.
     const cold = view("wrk_a_cold", { capacity: withIos({ maxRunning: 5 }) });
     const slim = view("wrk_z_slim", {
       capacity: withIos({ maxRunning: 1 }),
@@ -134,7 +130,6 @@ describe("the registered warm-then-free policy", () => {
     ["failed", "failed" as const],
     ["not reporting its health", undefined],
   ])("sends a worker that is %s nothing while a healthy one serves", (_label, health) => {
-    // wrk_a sorts first and holds a warm device, so only the health stage can pass it over.
     const { health: _drop, ...base } = view("wrk_a", {
       devices: [deviceFixture("dev_1", "ready")],
     });
@@ -158,8 +153,6 @@ describe("the registered warm-then-free policy", () => {
   });
 
   it("picks a worker whose only slot is held by its own warm device, ahead of the free-slot check", () => {
-    // The ready device counts as running, so wrk_a has no free slot; only warm-hit running
-    // before free-slot can still pick it.
     const warm = view("wrk_a", {
       capacity: withIos({ maxRunning: 1, running: 1 }),
       devices: [deviceFixture("dev_1", "ready")],
@@ -173,8 +166,6 @@ describe("the registered warm-then-free policy", () => {
   });
 
   it("drops a worker with no free slot before it ranks RAM, so a worker at its budget with a free slot is picked", () => {
-    // wrk_a is under budget but full; wrk_b is at budget with a free slot. With RAM ranked
-    // first only wrk_a would survive the rank, and the free-slot filter would then leave no pick.
     const full = view("wrk_a", { capacity: withIos({ maxRunning: 1, running: 1 }) });
     const capacity = withIos({ maxRunning: 1 });
     const atBudget = view("wrk_b", {
@@ -185,7 +176,6 @@ describe("the registered warm-then-free policy", () => {
   });
 
   it("passes over a worker at its RAM budget while another has room, and asks it when it is the only one", () => {
-    // wrk_b has more free running capacity, so only the RAM rank can prefer wrk_a over it.
     const atBudget = (maxRunning: number) => ({
       ...withIos({ maxRunning }),
       ios: { ...withIos({ maxRunning }).ios, atRamBudget: true },
@@ -194,7 +184,6 @@ describe("the registered warm-then-free policy", () => {
     const full = view("wrk_b", { capacity: atBudget(5) });
 
     expect(policy.select(REQUEST, [full, roomy])).toMatchObject({ workerId: "wrk_a" });
-    // Equal free capacity: only the RAM rank removes a worker, so it is the deciding stage.
     const equal = view("wrk_b", { capacity: atBudget(1) });
     expect(policy.select(REQUEST, [equal, roomy])).toEqual({
       reason: "free-capacity",
@@ -254,8 +243,6 @@ describe("the registered warm-then-free policy", () => {
   });
 
   it("keeps a worker whose running slots hold only devices that are not leased, and a request no warm device fits is dispatched to it at once", () => {
-    // The ready device is another runtime, so no warm hit: only free-slot can decide. The
-    // planner evicts it, so the slot is free, on the platform and globally.
     const other = {
       ...deviceFixture("dev_1", "ready"),
       spec: { physical: false, model: "iPhone 17", osVersion: "25.0", platform: "ios" as const },
@@ -313,7 +300,6 @@ describe("the registered warm-then-free policy", () => {
 
   it("looks at the request's platform only when it asks about the RAM budget", () => {
     const capacity = statusFixture().capacity;
-    // wrk_a is at its budget for android only: for an iOS request it is as good as wrk_b.
     const androidFull = view("wrk_a", {
       capacity: { ...capacity, android: { ...capacity.android, atRamBudget: true } },
     });
