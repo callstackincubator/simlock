@@ -144,20 +144,66 @@ describe("Dispatcher: lease.request requires", () => {
     await expect(waiting).resolves.toMatchObject({ lease: { requesterId: "w" } });
   });
 
-  it("refuses requires together with idempotencyKey with BAD_REQUEST and stores nothing", async () => {
-    const { dispatcher, registry } = await buildDispatcher({
-      capabilitySources: sources("available").list,
+  it("accepts requires with an idempotencyKey, and a replay answers the first request's result, or IDEMPOTENCY_CONFLICT when the set of names differs, before it checks capabilities", async () => {
+    const capability = sources("available");
+    const bank = { name: "bank-network", read: async () => ({ state: "available" }) };
+    const { dispatcher, state } = await buildDispatcher({
+      capabilitySources: [...capability.list, bank],
     });
+    const ask = { ...IOS, idempotencyKey: "key-1", requesterId: "a" } as const;
+    const names = ["agent-device", "bank-network"];
 
+    const first = await dispatcher.dispatch(
+      "lease.request",
+      { ...ask, requires: names },
+      session(),
+    );
+
+    const reordered = await dispatcher.dispatch(
+      "lease.request",
+      { ...ask, requires: [...names].reverse() },
+      session(),
+    );
+    expect(reordered.lease.id).toBe(first.lease.id);
+    capability.current.state = "unavailable";
+    const afterUnavailable = await dispatcher.dispatch(
+      "lease.request",
+      { ...ask, requires: names },
+      session(),
+    );
+    expect(afterUnavailable.lease.id).toBe(first.lease.id);
+    for (const requires of [[...names, "vpn-eu"], names.slice(0, 1), undefined]) {
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          { ...ask, ...(requires === undefined ? {} : { requires }) },
+          session(),
+        ),
+      ).rejects.toMatchObject({
+        code: "IDEMPOTENCY_CONFLICT",
+        message: expect.stringContaining("or required capabilities"),
+      });
+    }
+    const restarted = (await buildDispatcher({ capabilitySources: [bank], state })).dispatcher;
+    const afterRestart = await restarted.dispatch(
+      "lease.request",
+      { ...ask, requires: [...names].reverse() },
+      session(),
+    );
+    expect(afterRestart.lease.id).toBe(first.lease.id);
     await expect(
-      dispatcher.dispatch("lease.request", { ...REQUIRES, idempotencyKey: "key-1" }, session()),
-    ).rejects.toMatchObject({
-      code: "BAD_REQUEST",
-      message: expect.stringContaining("requires cannot be combined with idempotencyKey"),
-    });
+      restarted.dispatch("lease.request", { ...ask, requires: [...names, "vpn-eu"] }, session()),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
 
-    expect(registry.leaseRequests()).toEqual([]);
-    expect(registry.snapshot.leases).toEqual([]);
+    capability.current.state = "available";
+    const empty = { ...IOS, idempotencyKey: "key-2", requesterId: "b" } as const;
+    const withEmpty = await dispatcher.dispatch(
+      "lease.request",
+      { ...empty, requires: [] },
+      session(),
+    );
+    const without = await dispatcher.dispatch("lease.request", empty, session());
+    expect(without.lease.id).toBe(withEmpty.lease.id);
   });
 
   it.each([
