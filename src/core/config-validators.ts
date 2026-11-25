@@ -32,6 +32,7 @@ import {
   positiveInteger,
   positiveNumber,
   requireObject,
+  stringArray,
   stringUnion,
   stringValue,
   type Validator,
@@ -160,6 +161,7 @@ export function configValidators(
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
+    tags: stringArray,
     gateway: objectValidator({
       url: stringValue,
       token: stringValue,

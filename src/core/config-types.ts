@@ -49,6 +49,8 @@ export interface Config {
   readonly capabilities: Readonly<
     Record<string, { readonly enabled: boolean } & Readonly<Record<string, unknown>>>
   >;
+  /** why: ADR 0091 §1: names an operator gives this worker; each is a capability that is always available, so a lease can require it. */
+  readonly tags: readonly string[];
   readonly mode: DaemonMode;
   readonly capacity: CapacityConfig;
   /**
