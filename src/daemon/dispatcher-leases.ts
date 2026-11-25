@@ -49,7 +49,10 @@ export class LeaseHandlers {
           );
         }
       }
-      await requireCapabilities(this.options, input.requires);
+      // why: ADR 0091 §3: a replay is answered from the stored request, so a capability that changed since is not checked again.
+      if (!this.options.leases.hasRequest(requesterId, input.idempotencyKey)) {
+        await requireCapabilities(this.options, input.requires);
+      }
       const ownerId = input.owner ?? session.principal;
       try {
         const grant = await this.options.leases.request(request, {
@@ -63,6 +66,7 @@ export class LeaseHandlers {
           ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
           ...(input.runId === undefined ? {} : { runId: input.runId }),
           ...(input.label === undefined ? {} : { label: input.label }),
+          ...(input.requires === undefined ? {} : { requires: input.requires }),
           ...(input.fleetRequestId === undefined ? {} : { fleetRequestId: input.fleetRequestId }),
           ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
           ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),

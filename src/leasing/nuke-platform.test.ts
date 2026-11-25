@@ -1,0 +1,223 @@
+import { describe, expect, it } from "vitest";
+import { Nuke, type Platform } from "../core/index.js";
+import { FakeDriver } from "../core/testing.js";
+import { FakeClock } from "../ports/index.js";
+import { androidRequest, createHarness, flush, request } from "./test-create-leasing.js";
+
+describe("a platform nuke", () => {
+  async function twoPlatforms() {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const harness = await createHarness({ driver: ios, drivers: [ios, android] });
+    const grants = {
+      android: await harness.engine.request(androidRequest, { ownerId: "a", requesterId: "a" }),
+      ios: await harness.engine.request(request, { ownerId: "i", requesterId: "i" }),
+    };
+    const nuke = new Nuke({ executor: harness.engine, registry: harness.registry });
+    return { android, grants, harness, ios, nuke };
+  }
+
+  it("releases only the platform's leases, ends a physical lease and keeps the device, cancels waiting requests, and deletes only its devices, with a report listing only those", async () => {
+    for (const [platform, other] of [
+      ["ios", "android"],
+      ["android", "ios"],
+    ] as const satisfies readonly (readonly [Platform, Platform])[]) {
+      const { android, grants, harness, ios, nuke } = await twoPlatforms();
+      // why: an idle device of the other platform is the one a nuke that ignored the platform would delete; a second is deleted by another path while the nuke runs and is no part of its report.
+      const idle = async (driverDeviceId: string) => {
+        const device = await harness.registry.registerDevice({
+          driverData: { fakeDeviceId: driverDeviceId },
+          driverDeviceId,
+          provisionDuration: 0,
+          spec: { model: "Phone", osVersion: "1", physical: false, platform: other },
+        });
+        await harness.registry.transitionDevice(device.id, "ready", {
+          event: "device.ready",
+          payload: { bootDuration: 0, deviceId: device.id },
+        });
+        return device;
+      };
+      const kept = await idle("idle-kept");
+      const goneByOtherPath = await idle("idle-gone");
+      (other === "ios" ? ios : android).setManagedReality({
+        devices: ["idle-kept", "idle-gone"].map((deviceId) => ({
+          address: `${deviceId}-address`,
+          deviceId,
+          driverData: { fakeDeviceId: deviceId },
+          runState: "running" as const,
+        })),
+        processes: [],
+      });
+      harness.bus.subscribe("lease.released", () => {
+        void harness.registry.markDeviceMissing(goneByOtherPath.id, "test");
+      });
+
+      const report = await nuke.run({ deleteDevices: true, platform });
+
+      expect(report.releasedLeaseIds, platform).toEqual([grants[platform].lease.id]);
+      expect(report.deletedDevices, platform).toEqual([grants[platform].device.id]);
+      expect(
+        harness.registry.snapshot.leases.map((lease) => lease.id),
+        platform,
+      ).toEqual([grants[other].lease.id]);
+      expect(
+        harness.registry.snapshot.devices.find((device) => device.id === grants[other].device.id)
+          ?.state,
+        platform,
+      ).toBe("leased");
+      expect(
+        harness.registry.snapshot.devices.find((device) => device.id === kept.id)?.state,
+        platform,
+      ).toBe("ready");
+    }
+
+    const waiting = await twoPlatforms();
+    const queued = waiting.harness.engine.request(androidRequest, {
+      ownerId: "next",
+      requesterId: "next",
+    });
+    const cancelled = expect(queued).rejects.toMatchObject({ name: "NukeCancelledError" });
+    await flush();
+    await waiting.nuke.run({ deleteDevices: false, platform: "ios" });
+    await cancelled;
+
+    const physical = await twoPlatforms();
+    const phone = await physical.harness.registry.enrollPhysical({
+      apps: [],
+      class: "phone",
+      driverDeviceId: "UDID-A",
+      model: "iPhone 15 Pro",
+      osVersion: "18.4",
+      platform: "ios",
+    });
+    physical.ios.setPhysicalPresence("UDID-A", true);
+    await physical.harness.engine.release(physical.grants.ios.lease.id, "explicit");
+    const physicalGrant = await physical.harness.engine.request(
+      { model: "iPhone 15 Pro", physical: true, platform: "ios" },
+      { ownerId: "p", requesterId: "p" },
+    );
+    const report = await physical.nuke.run({ deleteDevices: true, platform: "ios" });
+    expect(report.releasedLeaseIds).toEqual([physicalGrant.lease.id]);
+    expect(report.deletedDevices).toEqual([]);
+    expect(
+      physical.harness.registry.snapshot.devices.find((device) => device.id === phone.id)?.state,
+    ).not.toBe("deleted");
+  });
+});
+
+describe("a platform nuke with --delete-devices", () => {
+  async function seededPlatforms() {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const seed = (id: string) => ({ id, kind: "seed", model: "Phone", osVersion: "1" }) as const;
+    ios.setSources([seed("ios-seed"), { ...seed("ios-orphan"), orphan: true }]);
+    android.setSources([seed("android-seed")]);
+    const harness = await createHarness({ driver: ios, drivers: [ios, android] });
+    for (const [name, spec, requesterId] of [
+      ["ios-base", request, "i"],
+      ["android-base", androidRequest, "a"],
+    ] as const) {
+      const grant = await harness.engine.request(spec, { ownerId: requesterId, requesterId });
+      await harness.engine.core.baselines.save({ leaseId: grant.lease.id, name, requesterId });
+    }
+    const nuke = new Nuke({ executor: harness.engine, registry: harness.registry });
+    const sourcesOf = async (driver: FakeDriver) =>
+      (await driver.listSources()).map((source) => source.id);
+    const baselineNames = async () =>
+      (await harness.engine.core.baselines.list()).map((entry) => entry.name);
+    return { android, baselineNames, ios, nuke, sourcesOf };
+  }
+
+  it("deletes only that platform's seeds and baselines, never an orphan, and nothing without --delete-devices", async () => {
+    const plain = await seededPlatforms();
+    const kept = {
+      android: await plain.sourcesOf(plain.android),
+      ios: await plain.sourcesOf(plain.ios),
+    };
+    expect(await plain.baselineNames()).toEqual(["android-base", "ios-base"]);
+    const none = await plain.nuke.run({ deleteDevices: false, platform: "ios" });
+    expect(none.removedBaselines).toEqual([]);
+    expect(await plain.sourcesOf(plain.ios)).toEqual(kept.ios);
+    expect(await plain.sourcesOf(plain.android)).toEqual(kept.android);
+    expect(await plain.baselineNames()).toEqual(["android-base", "ios-base"]);
+
+    const ios = await seededPlatforms();
+    const iosReport = await ios.nuke.run({ deleteDevices: true, platform: "ios" });
+    expect(iosReport.removedBaselines).toEqual(["ios-base"]);
+    expect(await ios.baselineNames()).toEqual(["android-base"]);
+    expect(await ios.sourcesOf(ios.ios)).toEqual(["ios-orphan"]);
+    expect(await ios.sourcesOf(ios.android)).toEqual(kept.android);
+
+    const android = await seededPlatforms();
+    const androidReport = await android.nuke.run({ deleteDevices: true, platform: "android" });
+    expect(androidReport.removedBaselines).toEqual(["android-base"]);
+    expect(await android.baselineNames()).toEqual(["ios-base"]);
+    expect(await android.sourcesOf(android.android)).toEqual([]);
+    expect(await android.sourcesOf(android.ios)).toEqual(kept.ios);
+  });
+});
+
+describe("a platform nuke and the warm pool's learned kinds", () => {
+  it("forgets only that platform's learned kinds, a baseline kind included", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      knownModels: [request.model],
+      platform: "ios",
+    });
+    const android = new FakeDriver({
+      availableOsVersions: ["36"],
+      clock,
+      knownModels: [androidRequest.model],
+      platform: "android",
+    });
+    const harness = await createHarness({
+      driver: ios,
+      drivers: [ios, android],
+      limits: {
+        android: { maxDevices: 2, maxRunning: 2 },
+        ios: { maxDevices: 3, maxRunning: 3 },
+        maxRunning: 5,
+      },
+      startPool: true,
+      warmPool: { baselineLearnAfter: 1 },
+    });
+    const lease = async (spec: Parameters<typeof harness.engine.request>[0], who: string) =>
+      harness.engine.request(spec, { ownerId: who, requesterId: who });
+    const saver = await lease(request, "saver");
+    await harness.engine.core.baselines.save({
+      leaseId: saver.lease.id,
+      name: "checkout",
+      requesterId: "saver",
+    });
+    for (const [spec, who] of [
+      [request, "plain-ios"],
+      [{ baseline: "checkout", platform: "ios" }, "baseline-ios"],
+    ] as const) {
+      await harness.engine.release((await lease(spec, who)).lease.id, "explicit");
+    }
+    // why: two Android leases held at once make the kind's count 2, which its lease rows keep.
+    const bothAndroid = [await lease(androidRequest, "a1"), await lease(androidRequest, "a2")];
+    harness.clock.advance(1);
+    for (const grant of bothAndroid) await harness.engine.release(grant.lease.id, "explicit");
+    await flush();
+    await harness.engine.core.passWarmPool();
+    const learned = () =>
+      harness.engine
+        .figures()
+        .targets.filter((target) => target.origin === "learned")
+        .map((target) => `${target.platform}:${String(target.count)}`);
+    expect(learned().sort()).toEqual(["android:2", "ios:1", "ios:1"]);
+
+    await new Nuke({ executor: harness.engine, registry: harness.registry }).run({
+      deleteDevices: false,
+      platform: "ios",
+    });
+    await harness.engine.core.passWarmPool();
+
+    expect(learned()).toEqual(["android:2"]);
+  });
+});

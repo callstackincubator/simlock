@@ -207,9 +207,9 @@ export class WarmPool {
     this.#armTick();
   }
 
-  /** why: forgets every learned kind, as nuke starts the pool over; the next lease learns its kind again. */
-  forget(): void {
-    this.#learned.clear();
+  /** why: forgets every learned kind of the platform, or of both, as nuke starts the pool over; the next lease learns its kind again. */
+  forget(platform?: Platform): void {
+    this.#learned.clear(platform);
   }
 
   /**

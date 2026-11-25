@@ -397,11 +397,17 @@ export class BaselineService {
    * will not delete is an orphan `doctor` lists and not a baseline that points at nothing. Every
    * source is tried; the names whose rows went are answered with the first failure, if any.
    */
-  async removeAll(): Promise<{ readonly failure?: unknown; readonly names: readonly string[] }> {
-    const rows = this.options.state.database
-      .prepare("SELECT name, version, platform, source_id FROM baselines ORDER BY name, version")
-      .all();
-    this.options.state.database.prepare("DELETE FROM baselines").run();
+  async removeAll(
+    platform?: Platform,
+  ): Promise<{ readonly failure?: unknown; readonly names: readonly string[] }> {
+    const { database } = this.options.state;
+    const [where, key] = platform === undefined ? ["", []] : [" WHERE platform = ?", [platform]];
+    const rows = database
+      .prepare(
+        `SELECT name, version, platform, source_id FROM baselines${where} ORDER BY name, version`,
+      )
+      .all(...key);
+    database.prepare(`DELETE FROM baselines${where}`).run(...key);
     let failure: unknown;
     for (const row of rows) {
       this.options.eventBus.emit(

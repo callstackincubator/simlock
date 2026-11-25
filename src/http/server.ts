@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 
-import type { Logger } from "../ports/index.js";
+import type { Clock, Logger, TimerHandle } from "../ports/index.js";
 
 /**
  * Where `pnpm build` writes the console (ADR 0011 §2): `dist/ui`, beside this module's own
@@ -38,6 +38,8 @@ export interface HttpGatewayOptions {
   readonly logger: Logger;
   /** The built console's directory. Defaults to `dist/ui` beside this module; tests pass their own. */
   readonly consoleRoot?: string;
+  /** why: the linger after an answer sent before its request body ended runs on it, so a test drives it with a fake clock. */
+  readonly clock: Clock;
   /**
    * why: Called once, with the Node HTTP server, as soon as it exists (before it is listening).
    * ADR 0005 §4 puts the worker uplink on this same listener -- upgraded on `/v1/uplink` -- so
@@ -155,6 +157,7 @@ export class HttpGateway {
   readonly #sockets = new Set<Socket>();
   readonly #onServerCreated: ((server: Server) => void) | undefined;
   readonly #consoleRoot: string;
+  readonly #clock: Clock;
   #server: Server | undefined;
 
   constructor(app: FetchApp, options: HttpGatewayOptions) {
@@ -164,6 +167,7 @@ export class HttpGateway {
     this.#logger = options.logger;
     this.#onServerCreated = options.onServerCreated;
     this.#consoleRoot = options.consoleRoot ?? BUILT_CONSOLE_ROOT;
+    this.#clock = options.clock;
   }
 
   /** Resolves once listening, with the actual bound port (matches the configured one in v1, since port 0 is never used here). */
@@ -198,6 +202,11 @@ export class HttpGateway {
       });
       // why: Node cuts any request that lasts over 300 s by default, which would cut a big upload that keeps moving; a stalled one is cut by the upload's own silence bound, and headers stay bounded by `headersTimeout`.
       server.requestTimeout = 0;
+      server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+        response.once("close", () => {
+          if (!request.complete) cutUnreadBody(request, this.#clock);
+        });
+      });
       this.#server = server;
       // Before `listening` fires deliberately: an upgrade cannot arrive until the server is
       // listening, and wiring it here means there is no window where a connection is accepted
@@ -223,6 +232,25 @@ export class HttpGateway {
     });
     this.#logger.info("HTTP gateway stopped", { host: this.#host, port: this.#port });
   }
+}
+
+// why: `requestTimeout = 0` removed Node's only bound on a request whose body never ends, so an answer sent before its body ended (a refused upload) would leave the socket to the adapter's half-close alone; where that close never follows (reported, not explained, in issue 1810), the socket holds the unread bytes in kernel buffers for good (https://github.com/callstackincubator/simlock/issues/1810).
+const UNREAD_BODY_LINGER_MS = 2_000;
+
+// why: the linger lets the client read the answer before the socket is cut; a socket whose body ended in it stays open for keep-alive. Every listener added here goes when the body ends, the timer fires or the socket closes, so a keep-alive socket does not collect them.
+function cutUnreadBody(request: IncomingMessage, clock: Clock): void {
+  const socket = request.socket;
+  const settle = () => {
+    clock.cancel(timer);
+    socket.off("close", settle);
+    request.off("end", settle);
+  };
+  const timer: TimerHandle = clock.setTimer(UNREAD_BODY_LINGER_MS, () => {
+    settle();
+    if (!request.complete) socket.destroy();
+  });
+  socket.once("close", settle);
+  request.once("end", settle);
 }
 
 // why: the node adapter answers a body that fails mid-stream by ending the response cleanly with an error line, so a client would take a cut-short download for a whole one; this makes the client see the failure.

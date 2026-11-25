@@ -510,7 +510,14 @@ export async function composeWorker(
       core.seedSettler.beginStop();
     },
     // why: the source's name is the config key's; the core names no module, so the composition supplies it.
-    capabilitySources: [...moduleHost.capabilitySources],
+    capabilitySources: [
+      ...moduleHost.capabilitySources,
+      // why: a tag is the operator's word, so nothing reads its state: it is always available (ADR 0091 §2).
+      ...config.tags.map((name) => ({
+        name,
+        read: () => Promise.resolve({ state: "available" }),
+      })),
+    ],
     capacity: core.capacityReader,
     warmPool: core.warmPoolReader,
     catalog: core.catalog,
@@ -720,6 +727,7 @@ export async function composeWorker(
       auth,
     });
     const gateway = new HttpGateway(app, {
+      clock,
       host: config.http.host,
       logger: httpLogger,
       onServerCreated: (server) =>

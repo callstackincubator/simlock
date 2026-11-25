@@ -26,6 +26,7 @@ export interface LeaseRequestInput {
   readonly runId?: string;
   readonly label?: string;
   readonly metadata?: Readonly<Record<string, string>>;
+  readonly requires?: readonly string[];
 }
 
 export interface LeasePayload {
@@ -133,6 +134,7 @@ function requestNameOptions(body: LeaseRequestInput) {
     ...(body.runId === undefined ? {} : { runId: body.runId }),
     ...(body.label === undefined ? {} : { label: body.label }),
     ...(body.metadata === undefined ? {} : { metadata: body.metadata }),
+    ...(body.requires === undefined ? {} : { requires: body.requires }),
   };
 }
 
