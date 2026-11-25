@@ -124,3 +124,52 @@ describe("loadConfig with optional modules", () => {
     expect(parsed.capabilities).toEqual({ alpha: { enabled: true, greeting: "hello" } });
   });
 });
+
+describe("loadConfig with worker tags", () => {
+  const badName =
+    'Invalid config value for "tags[0]": expected a name of 1 to 32 lowercase letters, digits and hyphens that starts with a letter';
+  const refusals: readonly (readonly [string, unknown, string])[] = [
+    ["an uppercase name", ["Bank"], badName],
+    ["a name that starts with a digit", ["1st-floor"], badName],
+    ["a name of 33 characters", ["a".repeat(33)], badName],
+    ["a name that is not a string", [null], badName],
+    [
+      "nine names",
+      Array.from({ length: 9 }, (_, index) => `tag-${String.fromCharCode(97 + index)}`),
+      'Invalid config value for "tags": expected at most 8 names',
+    ],
+    [
+      "a name listed twice",
+      ["a", "a"],
+      'Invalid config value for "tags": expected each name once, "a" is listed twice',
+    ],
+    [
+      "the name of a module",
+      ["alpha"],
+      'Invalid config value for "tags": expected no module name, "alpha" names an optional module',
+    ],
+    ["a string", "bank-network", 'Invalid config value for "tags": expected a list of tag names'],
+  ];
+
+  it("refuses tags that break a name rule with the message naming the rule, and accepts a valid list", async () => {
+    const accepted = await load({ tags: ["bank-network", "a".repeat(32)] });
+    expect(accepted.tags).toEqual(["bank-network", "a".repeat(32)]);
+
+    for (const [, tags, message] of refusals) {
+      await expect(load({ tags })).rejects.toThrow(message);
+    }
+  });
+
+  it("on a gateway, warns that tags configure a worker and starts, and says nothing when tags are absent", async () => {
+    const set: string[] = [];
+    const absent: string[] = [];
+
+    await load({ tags: ["bank-network"] }, [entry()], set, "gateway");
+    await load({}, [entry()], absent, "gateway");
+
+    expect(set).toEqual([
+      'Ignoring "tags": it configures a worker, and this daemon runs in gateway mode.',
+    ]);
+    expect(absent).toEqual([]);
+  });
+});

@@ -343,6 +343,35 @@ describe("POST /v1/lease-requests", () => {
   });
 });
 
+describe("POST /v1/lease-requests requires", () => {
+  it("passes a body's requires onto the dispatch input, with an Idempotency-Key too, and no requires key when the body names none, and refuses a bad name with 400 BAD_REQUEST before dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    const plain = postLeaseRequest(app, defaultBody);
+    const none = await waitForDispatch(dispatcher, "lease.request");
+    expect(none.input).not.toHaveProperty("requires");
+    none.resolve(makeGrant({ lease: { id: "lse_1" } }));
+    expect((await plain).status).toBe(201);
+
+    const keyed = postLeaseRequest(
+      app,
+      { ...defaultBody, requires: ["bank-network"] },
+      { ...otherAgentAuth, "idempotency-key": "key-1" },
+    );
+    const call = await waitForDispatch(dispatcher, "lease.request", 1);
+    expect(call.input).toMatchObject({ idempotencyKey: "key-1", requires: ["bank-network"] });
+    call.resolve(makeGrant({ lease: { id: "lse_2" } }));
+    expect((await keyed).status).toBe(201);
+
+    const calls = dispatcher.calls.length;
+    const refused = await postLeaseRequest(app, { ...defaultBody, requires: ["Bank"] });
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({
+      error: { code: "BAD_REQUEST", message: expect.stringContaining("requires") },
+    });
+    expect(dispatcher.calls).toHaveLength(calls);
+  });
+});
+
 describe("POST /v1/lease-requests runId", () => {
   it("passes a body's runId onto the dispatch input and names it on the granted lease and on GET /v1/leases/{id}, and refuses a bad one with 400 BAD_REQUEST before dispatching", async () => {
     const { app, dispatcher, registry } = buildHarness();

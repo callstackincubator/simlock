@@ -101,7 +101,7 @@ export class IdempotencyConflictError extends Error {
     readonly idempotencyKey: string,
   ) {
     super(
-      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request, lease ID, run ID or label`,
+      `Idempotency key ${idempotencyKey} was already used by requester ${requesterId} for a different device request, lease ID, run ID, label or required capabilities`,
     );
     this.name = "IdempotencyConflictError";
   }
@@ -203,6 +203,19 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
     return storedResult(record);
   }
 
+  /** why: whether a request is stored under the caller's key: read outside the decision lock, so a worker answers a replay before it checks capabilities (ADR 0091 §3). */
+  hasRequest(requesterId: string, idempotencyKey: string | undefined): boolean {
+    return (
+      idempotencyKey !== undefined &&
+      this.options.store
+        .leaseRequests()
+        .some(
+          (candidate) =>
+            candidate.requesterId === requesterId && candidate.idempotencyKey === idempotencyKey,
+        )
+    );
+  }
+
   /** The record stored under this request's key, once the repeat is proven to be the same
    * request from the same principal; `undefined` when there is no key or nothing under it. */
   #stored(
@@ -223,7 +236,8 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       !sameDeviceRequest(record.request, request) ||
       record.leaseId !== options.leaseId ||
       record.runId !== options.runId ||
-      record.label !== options.label
+      record.label !== options.label ||
+      !sameNames(record.requires, options.requires)
     ) {
       throw new IdempotencyConflictError(options.requesterId, key);
     }
@@ -246,11 +260,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
   ): Promise<{ readonly id: string; readonly started: Started }> {
     const record = await this.options.store.createLeaseRequest({
       id,
-      ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
-      ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
-      ...(options.runId === undefined ? {} : { runId: options.runId }),
-      ...(options.label === undefined ? {} : { label: options.label }),
-      ...(options.fleetRequestId === undefined ? {} : { fleetRequestId: options.fleetRequestId }),
+      ...optionalFields(options),
       ownerId: options.ownerId,
       request,
       requesterId: options.requesterId,
@@ -413,6 +423,27 @@ function storedResult<Grant>(record: LeaseRequestRecord<Grant>): Promise<Grant> 
   if (record.state === "cancelled") return Promise.reject(new RequestCancelledError(record.id));
   const failure = record.failure ?? { code: "INTERNAL", message: "Lease request failed" };
   return Promise.reject(new ReplayedLeaseRequestError(failure.code, failure.message));
+}
+
+function optionalFields(options: LeaseRequestOptions) {
+  return {
+    ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
+    ...(options.leaseId === undefined ? {} : { leaseId: options.leaseId }),
+    ...(options.runId === undefined ? {} : { runId: options.runId }),
+    ...(options.label === undefined ? {} : { label: options.label }),
+    ...(options.requires === undefined ? {} : { requires: options.requires }),
+    ...(options.fleetRequestId === undefined ? {} : { fleetRequestId: options.fleetRequestId }),
+  };
+}
+
+/** why: ADR 0091 §3: the names are compared as a set, and an empty list is none. */
+function sameNames(
+  stored: readonly string[] | undefined,
+  sent: readonly string[] | undefined,
+): boolean {
+  const left = new Set(stored ?? []);
+  const right = new Set(sent ?? []);
+  return left.size === right.size && [...left].every((name) => right.has(name));
 }
 
 /** An omitted field equals only an omitted one: a request naming no mode is not one naming the worker's default. */

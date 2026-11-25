@@ -137,6 +137,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     healthMonitor: leasing.healthMonitor as LeaseHealthMonitor,
     requests: leasing.requests,
     request: (request, requestOptions) => leasing.request(request, requestOptions),
+    hasRequest: (requesterId, idempotencyKey) => leasing.hasRequest(requesterId, idempotencyKey),
     release: (leaseId, reason) => leasing.release(leaseId, reason),
     releaseAll: (reason) => leasing.releaseAll(reason),
     releaseRun: (runId, ownerId) => leasing.releaseRun(runId, ownerId),

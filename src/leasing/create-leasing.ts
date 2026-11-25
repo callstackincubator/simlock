@@ -273,6 +273,8 @@ export function createLeasing(options: LeasingOptions): Leasing {
       request: DeviceRequest,
       requestOptions: LeaseRequestOptions,
     ): Promise<LeaseGrant> => acquisition.request(request, requestOptions),
+    hasRequest: (requesterId: string, idempotencyKey: string | undefined) =>
+      requests.hasRequest(requesterId, idempotencyKey),
     release: async (leaseId: string, reason: ClientReleaseReason) => {
       await releaseCoordinator.release(leaseId, reason);
     },

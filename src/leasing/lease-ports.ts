@@ -19,6 +19,8 @@ export interface RunRelease {
 
 export interface LeaseCommands {
   request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant>;
+  /** why: a read outside the decision lock: the handler skips its capability check when the request is a replay (ADR 0091 §3). */
+  hasRequest(requesterId: string, idempotencyKey: string | undefined): boolean;
   release(leaseId: string, reason: ClientReleaseReason): Promise<void>;
   releaseAll(reason: ClientReleaseReason): Promise<readonly string[]>;
   releaseRun(runId: string, ownerId: string | undefined): Promise<RunRelease>;

@@ -199,6 +199,7 @@ const REQUEST_COLUMNS = [
   "fleet_request_id",
   "run_id",
   "label",
+  "requires",
   "platform",
   "model",
   "os_version",
@@ -386,6 +387,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       record.fleetRequestId ?? null,
       nullable(record.runId),
       nullable(record.label),
+      requiresText(record.requires),
       request.platform,
       request.model ?? null,
       request.osVersion ?? null,
@@ -570,6 +572,20 @@ function exceptOf(reader: RowReader): readonly string[] | undefined {
   return reader.optText("except_categories")?.split(",");
 }
 
+function requiresText(requires: readonly string[] | undefined): string | null {
+  return requires === undefined ? null : JSON.stringify(requires);
+}
+
+function requiresFromRow(reader: RowReader): readonly string[] | undefined {
+  const text = reader.optText("requires");
+  if (text === undefined) return undefined;
+  const names: unknown = JSON.parse(text);
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
+    throw new RegistryLoadError("Invalid lease_requests row: bad value in requires");
+  }
+  return names as string[];
+}
+
 function baselineOf(reader: RowReader): { baseline?: { name: string; version: number } } {
   const name = reader.optText("baseline_name");
   const version = reader.optInt("baseline_version");
@@ -659,6 +675,7 @@ function loadLeaseRequests(
         ...present("fleetRequestId", reader.optText("fleet_request_id")),
         ...present("runId", reader.optText("run_id")),
         ...present("label", reader.optText("label")),
+        ...present("requires", requiresFromRow(reader)),
         ownerId: reader.text("owner_id"),
         request: requestFromRow(reader),
         requesterId: reader.text("requester_id"),

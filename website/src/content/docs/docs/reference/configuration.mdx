@@ -356,6 +356,14 @@ A name Simlock does not know is warned about and ignored.
 | `capabilities.stream.maxDimension`          | integer `96`–`4096`                  | `720`            | Longest side of the picture, in pixels. The setting that changes bandwidth most.                             | Worker     |
 | `capabilities.stream.bitrateKbps`           | integer `100`–`40000`                | `1500`           | Average bitrate in kilobits per second.                                                                      | Worker     |
 
+### Tags
+
+A worker's file may also hold a top-level `tags` list. Each tag is a capability name that is always available, so a lease that names it in `requires` is placed only on a worker that has it. Use it to say what sets a worker apart, such as `["bank-network"]`. Tags are read at start, so restart the worker after a change. A gateway ignores the key with a warning.
+
+| Key    | Type                    | Default | Meaning                                                                                                                                                                                                          | Applies to |
+| ------ | ----------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `tags` | list of up to 8 names   | `[]`    | Each name is 1 to 32 lowercase letters, digits and hyphens, starts with a letter, is listed once, and is not the name of an optional module. `simlock status` lists each tag as `available` after the modules. | Worker     |
+
 ## Logging and history
 
 | Key                  | Type             | Default                                         | Meaning                                                                                                                     | Applies to |

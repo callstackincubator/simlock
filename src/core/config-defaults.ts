@@ -79,6 +79,7 @@ export function defaultConfig(
         { ...(entry.defaults as Record<string, unknown>), enabled: defaulted.has(entry.name) },
       ]),
     ) as Config["capabilities"],
+    tags: [],
     capacity: {
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),

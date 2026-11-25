@@ -146,23 +146,6 @@ function refusePhysicalWithImageFields(): <
   };
 }
 
-// why: a replay would have to be checked against a capability state that changed since.
-function refuseRequiresWithIdempotencyKey(): <
-  T extends { readonly requires?: unknown; readonly idempotencyKey?: string | undefined },
->(
-  input: T,
-  context: z.RefinementCtx,
-) => void {
-  return (input, context) => {
-    if (input.requires === undefined || input.idempotencyKey === undefined) return;
-    context.addIssue({
-      code: "custom",
-      message: "requires cannot be combined with idempotencyKey",
-      path: ["requires"],
-    });
-  };
-}
-
 /** why: one object-level check with no path (like `osVersion`), so every transport, MCP included, answers `BAD_REQUEST` with the message as written. */
 function refuseBadExcept(): <
   T extends {
@@ -309,8 +292,7 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseBadMetadata())
   .superRefine(refuseBadRunId())
   .superRefine(refuseBadLabel())
-  .superRefine(refusePhysicalWithImageFields())
-  .superRefine(refuseRequiresWithIdempotencyKey());
+  .superRefine(refusePhysicalWithImageFields());
 
 export const leaseRequest = defineOperation({
   name: "lease.request",
