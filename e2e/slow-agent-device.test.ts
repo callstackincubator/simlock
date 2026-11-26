@@ -240,6 +240,33 @@ function defineSuite(target: Target): void {
   );
 
   it(
+    "an agent that opened a device and installed the Appduct fixture app runs test <flow> --maestro on it: the flow launches the app, its runFlow subflow sees tab-status, and the suite reports 1 test run and passed",
+    { timeout: 600_000 },
+    async () => {
+      const a = await agent("a");
+      ok(await open(a));
+      ok(await a.run(["install", "Appduct", target.app]));
+      const flows = await mkdtemp(join(tmpdir(), "simlock-ad-maestro-"));
+      onTestFinished(() => rm(flows, { force: true, recursive: true }));
+      const flow = join(flows, "first-launch.yaml");
+      await writeFile(
+        flow,
+        `appId: ${target.bundleId}\n---\n- launchApp\n- runFlow: see-tabs.yaml\n`,
+      );
+      await writeFile(
+        join(flows, "see-tabs.yaml"),
+        `appId: ${target.bundleId}\n---\n- assertVisible:\n    id: "tab-status"\n`,
+      );
+
+      const run = await a.run(["test", flow, "--maestro", "--platform", platform], {
+        timeout: 300_000,
+      });
+      expect(run.data, failureText(run)).toMatchObject({ total: 1, passed: 1, failed: 0 });
+      ok(run);
+    },
+  );
+
+  it(
     "an agent taps the centre of tab-status through the lease's input socket, as agent-device's snapshot places it, and the next snapshot shows the Status tab's screen",
     { timeout: 600_000 },
     async () => {
