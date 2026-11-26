@@ -23,6 +23,7 @@ import {
   SIMLOCK_HOME,
   STANDALONE_OFF,
   connectRetrying,
+  noRegistry,
   pollUntil,
   pollUntilListening,
   runningDaemons,
@@ -493,6 +494,7 @@ describe("daemon role (ADR 0034)", () => {
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           drivers: [],
           deviceDataTables: fakeDeviceDataTables,
+          npm: noRegistry(),
           role: "gateway",
         }),
       );

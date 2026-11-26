@@ -27,6 +27,7 @@ import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { productionDeviceDataTables, resolveDeviceDataTables } from "./driver-discovery.js";
 import {
   STANDALONE_OFF,
+  noRegistry,
   runningDaemons,
   start,
   stopDaemons,
@@ -106,6 +107,7 @@ describe("startDaemon state.db", () => {
           deviceDataTables: fakeDeviceDataTables,
           drivers: [],
           hostLoadProbe: null,
+          npm: noRegistry(),
           version: "1.2.3",
         } as StartDaemonOptions),
       );

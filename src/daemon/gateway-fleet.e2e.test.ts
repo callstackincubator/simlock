@@ -51,6 +51,7 @@ import { FakeWebhookPoster } from "../ports/testing.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
+import { noRegistry } from "./test-main.js";
 import type { DaemonServer } from "./server.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
 
@@ -283,7 +284,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       filesystem,
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
       logger: new NoopLogger(),
-      ...(options.npm === undefined ? {} : { npm: options.npm }),
+      npm: options.npm ?? noRegistry(),
       ...(options.protocolVersion === undefined
         ? {}
         : { protocolVersion: options.protocolVersion }),

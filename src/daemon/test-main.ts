@@ -6,6 +6,7 @@ import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import {
   FakeClock,
   FakeDirectoryAccessReader,
+  FakeNpmCli,
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
@@ -14,6 +15,11 @@ import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DaemonServer } from "./server.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
+
+// why: a daemon without `npm` builds the real CLI and its version check runs `npm view simlock@latest` against the registry at every start (#1885); this answers "no registry" the way a memory-filesystem rig already gets.
+export function noRegistry(): FakeNpmCli {
+  return new FakeNpmCli({ view: [{ ok: false, message: "no registry in tests" }] });
+}
 
 export const runningDaemons: DaemonServer[] = [];
 
@@ -50,6 +56,7 @@ export async function start(
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: null,
       logger,
+      npm: noRegistry(),
       version: "1.2.3",
       ...rest,
       configOverrides:
@@ -204,6 +211,7 @@ export async function startGateway(
       drivers: [],
       filesystem: new MemoryFilesystem(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      npm: noRegistry(),
       version: "1.2.3",
       ...rest,
     } as StartDaemonOptions),

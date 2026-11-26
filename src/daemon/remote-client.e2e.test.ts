@@ -10,6 +10,7 @@ import { NodeFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
+import { noRegistry } from "./test-main.js";
 import type { DaemonServer } from "./server.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
 
@@ -40,6 +41,7 @@ describe("the typed client over a worker's session path", () => {
         drivers: [new FakeDriver({ clock: new SystemClock(), platform: "android" })],
         filesystem: new NodeFilesystem(),
         logger: new NoopLogger(),
+        npm: noRegistry(),
         version: "1.0.0-e2e",
       }),
     );

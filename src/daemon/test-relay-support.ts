@@ -19,6 +19,7 @@ import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { linkPair, TappedTransport, type LinkPair } from "../link/testing.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
+import { noRegistry } from "./test-main.js";
 import type { RelayTarget, RelayTargets, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
@@ -184,6 +185,7 @@ export async function startWorker(
     // why: some tests run a real command on this worker, in a lease folder that has to exist on disk.
     filesystem: new NodeFilesystem(),
     logger,
+    npm: noRegistry(),
     relayTargets,
     version: "1.0.0-e2e",
     ...extra,
