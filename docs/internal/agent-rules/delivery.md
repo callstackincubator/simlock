@@ -267,7 +267,13 @@ is open, done means closed as completed.
     last review round passed (no blocking finding open), so review fixes do
     not each cost a lane run. A failure starts a loop: a fix run that may
     rerun the failing tests on the lane, then the whole lane again, until it
-    passes or six lane runs have failed. The loop's fixes are commits on the
+    passes or six lane runs have failed. A failing test the PR did not
+    change, which fails the same way at the PR's merge base, is not the
+    PR's: it gets a `bug:new` issue and no fix, and holds the PR only when
+    a Done when line rests on it. After two fixes for one test have failed
+    on the lane, the fix run first tests what they assumed; an expectation of the
+    spec that does not hold on the machine is a `spec needs`, not another
+    fix. The loop's fixes are commits on the
     PR's branch, even for code an earlier PR of the stack added, with no
     review and no new PR in between; once the lane passes, one fix check
     reviews every commit the loop added. The lane needs nobody's leave: it

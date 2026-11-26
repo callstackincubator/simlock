@@ -78,9 +78,9 @@ pages; it compares nothing. Open the pictures the change touched.
    with the Edit tool, or a script that fails when its match is missing.
 
 Arguments: `issue`, `branch`, `pr` once there is one, `mode`, `base` for a
-build stacked on another PR's branch; audit and fix runs also carry
-immutable `base-sha`, `merge-base`, `head`, `previous` and the resolution
-history; some modes `remaining` or `fixes`. Anything else is context.
+build stacked on another PR's branch; audit, fix and hardware-fix runs
+also carry immutable `base-sha`, `merge-base`, `head`, `previous` and the
+resolution history; some modes `remaining` or `fixes`. Anything else is context.
 Given `fixes`, do them and skip the audit.
 
 ## 1. Workspace

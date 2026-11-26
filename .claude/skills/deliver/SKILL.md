@@ -229,12 +229,21 @@ they name; never build again or restart review at round 1.
    - No Fix lines, and the audit reported `hardware` lines:
      `hardware-verifier` with the PR, the branch and those lines, on the
      commit the review passed (rule 16). On `fail`, the hardware loop: one
-     `implementer` run with `mode: hardware-fix` and the Evidence lines
-     under `fixes`, then `hardware-verifier` again on its head; repeat until
-     `pass`, with no review in between. After six failed lane runs, park.
+     `implementer` run with `mode: hardware-fix`, the Evidence lines and
+     the load from the report's `Ran:` line under `fixes`, and `previous
+     <the commit the review passed>`, then `hardware-verifier` again on
+     its head; repeat until `pass`, with no review in between. Every
+     verifier run of the loop gets `attempt: <n>`, counting from 1. A
+     `base fails:` line in a fix report is a
+     test that fails without the PR: every later verifier run gets it as
+     `known:`. `spec needs` in a fix report: decide, then tell (above),
+     which ends the loop for that test. After six failed lane runs, park.
      On `pass` after a loop: `reviewer` with `fix-check` and `previous
      <the commit the review passed>`, covering every loop commit; its
      fixes affecting device behavior need the lane again.
+   - Hardware `pass` with a line `not covered` because its test is
+     `known`: the line is unproven. Park as below, the Handoff naming the
+     bug the fix run opened.
    - Hardware `busy` or `unavailable`: finish the checks, do items 4
      and 5, run `gh pr ready <M>`, add the `needs-hardware` label to the PR,
      and park instead of running the gate.

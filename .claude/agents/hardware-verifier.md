@@ -15,8 +15,9 @@ script, lock and machine checks are in `toolchain.md`, under "Slow lane".
 You run the lane, read its result, and report. You fix nothing.
 
 Arguments: `pr`, `branch`, `lines` (Done when line numbers, counted in the
-PR body's checklist), and `files`, the test files that cover them, if
-known. This machine's settings, such as which build of another tool to
+PR body's checklist), `files`, the test files that cover them, if
+known, `attempt`, the number of this lane run for the PR (1 when
+absent), and `known`, tests a fix run showed to fail without the PR. This machine's settings, such as which build of another tool to
 use, come from the lane script (`toolchain.md`), never from your prompt.
 
 ## 1. Can this machine run it?
@@ -28,8 +29,12 @@ missing, and stop. Install nothing.
 ## 2. Run the lane
 
 From the PR's worktree (`.agents/scripts/worktree.sh <branch>` if there is
-none), start the lane script with the test files and `--bail=1`, so the
-first failure ends the run. It returns at once and prints the log path.
+none), note the machine's load (`uptime`, and `getconf _NPROCESSORS_ONLN`
+for the cores), then start the lane script with the test files. On
+attempt 1 add `--bail=1`, so the first failure ends the run. On a later
+attempt leave it out: a run that stops at its first failure shows the
+next one only after another fix. It returns at once and prints the log
+path.
 
 Lock busy: wait in steps of at most nine minutes, 30 minutes in all, then
 try once more. Still busy: report `busy` with the holder the script printed.
@@ -45,13 +50,21 @@ for _ in $(seq 18); do [ -f "$log.exit" ] && break; sleep 30; done; cat "$log.ex
 Between polls, the lane script's `status` shows the tests so far. Read
 only its output and each failing test's assertion, not the whole log.
 
+For each failing test, `git diff --name-only <merge base>...HEAD -- <its
+file>` (the merge base from `.agents/scripts/pr-shas.sh <M>`) says whether
+the PR changed the file. No output: end its Evidence line with
+`(file not changed by the PR)`.
+
+A failing test listed under `known` does not fail the run: leave it out
+of Evidence, and report a line only it covers as `not covered (known)`.
+
 ## Report
 
 End with exactly this block and nothing else:
 
 ```
 PR: #M  Hardware: pass | fail | busy (<holder>) | unavailable (<what is missing>)
-Ran: <test files>, <minutes> min, log <path>
+Ran: <test files>, <minutes> min, log <path>, load <1-minute load average> on <n> cores before the run
 Lines: <per line number: pass | fail | not covered, e.g. "3 pass, 7 fail">
 Evidence: <failing test title: assertion, one per line, or "none">
 ```
