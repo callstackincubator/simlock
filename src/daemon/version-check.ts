@@ -22,9 +22,10 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
   let latest: string | null = null;
   let timer: TimerHandle | undefined;
   let disposed = false;
+  const controller = new AbortController();
 
   const check = async (): Promise<void> => {
-    const viewed = await npm.view("simlock@latest").then(
+    const viewed = await npm.view("simlock@latest", controller.signal).then(
       (outcome) => outcome,
       (error: unknown) => ({
         ok: false as const,
@@ -46,6 +47,7 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
     latest: () => latest,
     dispose: () => {
       disposed = true;
+      controller.abort();
       if (timer !== undefined) clock.cancel(timer);
     },
   };

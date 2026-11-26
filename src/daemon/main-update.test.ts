@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
@@ -16,7 +16,11 @@ import {
   MemoryFilesystem,
   MemoryIpcTransport,
   MemoryLogSink,
+  NodeNpmCli,
   NoopLogger,
+  type ProcessResult,
+  type ProcessRunner,
+  type ProcessRunOptions,
   resolveDaemonSocketPath,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
@@ -355,6 +359,45 @@ describe("startDaemon version check", () => {
     const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
     const gateway = await startChecked(gatewayNpm, { role: "gateway" });
     await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
+  });
+
+  // why: the npm child runs in the data directory, so one that outlives its daemon keeps that folder busy on Windows (#1852).
+  it("stopping a worker or a gateway ends the npm view its version check is still waiting on", async () => {
+    for (const role of ["worker", "gateway"] as const) {
+      const views: { args: readonly string[]; ended: boolean }[] = [];
+      const runner = {
+        run: (_command: string, args: readonly string[], options: ProcessRunOptions) =>
+          new Promise<ProcessResult>((resolve) => {
+            const view = { args, ended: false };
+            views.push(view);
+            options.signal?.addEventListener("abort", () => {
+              view.ended = true;
+              resolve({ code: null, endedBy: "aborted", stderr: "", stdout: "" });
+            });
+          }),
+        spawn: () => {
+          throw new Error("unused");
+        },
+        spawnStreaming: () => {
+          throw new Error("unused");
+        },
+      } satisfies ProcessRunner;
+      const filesystem = new MemoryFilesystem();
+      const script = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+      await filesystem.mkdirp(dirname(script));
+      await filesystem.writeFileAtomic(script, "");
+      const npm = new NodeNpmCli({ dataDirectory: tmpdir(), filesystem, runner });
+
+      const { daemon } = await startChecked(npm, { role });
+      await expect
+        .poll(() => views.map((view) => view.args.slice(1)))
+        .toEqual([["view", "simlock@latest", "version"]]);
+      expect(views[0]?.ended).toBe(false);
+
+      await daemon.stop("test");
+
+      expect({ role, ended: views[0]?.ended }).toEqual({ role, ended: true });
+    }
   });
 
   it("the test start helpers start gateways while port 4700 is taken and workers with update overrides while port 4701 is taken", async () => {
