@@ -46,9 +46,10 @@ async function setup(
   return { capture, clock, filesystem, launcher };
 }
 
-// why: the capture program does not ignore SIGPIPE, so a frame written after its stdout's reader
-// is gone kills it before its stop unregisters its frame callbacks (#1583). This records, for each
-// stdout the driver cancels, whether the program had been asked to stop through stdin by then.
+// why: the capture program ignores SIGPIPE, so a frame written after its stdout's reader is gone
+// ends the stream through its viewer-gone path; stdin closing first is still the stop that
+// unregisters its frame callbacks without a failed write (#1583). This records, for each stdout the
+// driver cancels, whether the program had been asked to stop through stdin by then.
 function watchStdoutCancel(launcher: FakeBytePipeLauncher): boolean[] {
   const seen: boolean[] = [];
   const start = launcher.start.bind(launcher);

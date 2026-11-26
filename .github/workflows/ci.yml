@@ -151,12 +151,29 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: pnpm exec vitest run --project e2e --tags-filter='!slow' --shard="$SHARD/3"
 
+  # why: the Swift tests are the only proof of the capture program's lifecycle (stop on a dead
+  # daemon, the envelope, the panel follower), and `swift test` builds every target of the package,
+  # including the one that links CoreDevice symbols first shipped with Xcode 27, so only the
+  # xcode-27 image builds it (as in release.yml).
+  swift:
+    name: Swift tests
+    runs-on: xcode-27
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Swift tests
+        run: swift test --package-path vendor/screen-capture
+
   # why: branch protection requires the check named Quality, so this job stands for all of the
   # above. `always()` makes it report a failure when a job it needs fails, where a job skipped
   # by a failed need would count as passed.
   quality:
     name: Quality
-    needs: [static, unit, windows-unit, timing, e2e]
+    needs: [static, unit, windows-unit, timing, e2e, swift]
     if: always()
     runs-on: ubuntu-24.04
     permissions: {}
