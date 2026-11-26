@@ -153,7 +153,19 @@ public enum Wire {
 }
 
 public func log(_ message: String) {
-    FileHandle.standardError.write("[capture] \(message)\n".data(using: .utf8)!)
+    writeToStderr("[capture] \(message)\n")
+}
+
+/// why: `FileHandle.write` raises an Objective-C exception on a closed pipe, which Swift cannot
+/// catch, so a daemon that died would end the program on its next log line before its stop could
+/// run. A failed `write` is the daemon being gone, and the stdin thread is what ends the program.
+func writeToStderr(_ text: String) {
+    var remaining = Array(text.utf8)[...]
+    while !remaining.isEmpty {
+        let n = remaining.withUnsafeBytes { write(STDERR_FILENO, $0.baseAddress, $0.count) }
+        if n <= 0 { return }
+        remaining = remaining.dropFirst(n)
+    }
 }
 
 /// One line on why the program is stopping, as the very last thing on stderr, then exit 1. The
@@ -171,7 +183,7 @@ public func fail(_ code: Int32, _ reason: String) -> Never {
     let oneLine = reason
         .split(whereSeparator: { $0.isNewline })
         .joined(separator: " / ")
-    FileHandle.standardError.write("\(oneLine)\n".data(using: .utf8)!)
+    writeToStderr("\(oneLine)\n")
     exit(code)
 }
 

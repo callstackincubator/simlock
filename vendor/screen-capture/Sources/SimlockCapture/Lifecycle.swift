@@ -295,6 +295,10 @@ final class ExitSources {
     private let queue = DispatchQueue(label: "exit-sources")
 
     init(onExit: @escaping @Sendable (_ reason: String?) -> Void) {
+        // why: a daemon that dies closes stdout and stdin together, and the next frame write would
+        // kill the program with SIGPIPE before the stdin thread below could start `stop()`. Ignored,
+        // the write fails with EPIPE, which `Wire.emit` takes as the viewer going away.
+        signal(SIGPIPE, SIG_IGN)
         for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
