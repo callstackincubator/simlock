@@ -119,8 +119,8 @@ actor FrameCapture {
         // why: a program that was killed or crashed never unregistered, and the simulator's renderer
         // logs one fault per frame for each registration left, until the simulator shuts down. The
         // dead program's record names them; which descriptor held which is not recorded, so each
-        // is tried on every descriptor. That this silences the faults on a real simulator is not
-        // yet proven; the unit tests cover the record only.
+        // is tried on every descriptor. `e2e/slow-ios-stream.test.ts` shows on a real simulator
+        // that this silences the faults.
         let record = RegistrationRecord(deviceUDID: recordedUDID)
         for leftover in record.takeLeftovers() {
             for desc in candidates where desc.responds(to: unregSel) {
