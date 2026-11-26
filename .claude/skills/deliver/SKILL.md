@@ -123,6 +123,15 @@ checkout nobody edits, such as `git worktree add ../simlock-delivery
 origin/main`.
 
 ```bash
+node .agents/scripts/worktree-gc.mjs --apply | tail -1
+```
+
+Run it in the background and go on at once: it removes the worktrees whose
+work has merged, so the disk the slow lane needs stays free, and takes
+about 15 s for each one. Its notification needs no action, whatever it
+prints or exits with.
+
+```bash
 gh issue view <N> --json number,title,labels,assignees,body
 ```
 
