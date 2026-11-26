@@ -4,13 +4,26 @@ import XCTest
 @testable import SimlockCapture
 
 final class RegistrationRecordTests: XCTestCase {
-    func testTheNextProgramOnASimulatorTakesTheUUIDsADeadProgramLeftAndATidyStopLeavesNone() {
+    private func makeDirectory() -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("registration-record-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let dead = RegistrationRecord(deviceUDID: "A", directory: directory)
-        let other = RegistrationRecord(deviceUDID: "B", directory: directory)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return directory
+    }
+
+    private func exitedPid() throws -> Int32 {
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try child.run()
+        child.waitUntilExit()
+        return child.processIdentifier
+    }
+
+    func testTheNextProgramOnASimulatorTakesTheUUIDsADeadProgramLeftAndATidyStopLeavesNone() throws {
+        let directory = makeDirectory()
+        let dead = RegistrationRecord(deviceUDID: "A", directory: directory, pid: try exitedPid())
+        let other = RegistrationRecord(deviceUDID: "B", directory: directory, pid: try exitedPid())
         let first = [UUID(), UUID()]
 
         dead.write(first)
@@ -21,11 +34,36 @@ final class RegistrationRecordTests: XCTestCase {
         XCTAssertEqual(next.takeLeftovers(), [], "taken once")
 
         next.write([UUID()])
-        next.clear()
+        next.release()
         XCTAssertEqual(
-            RegistrationRecord(deviceUDID: "A", directory: directory).takeLeftovers(), [],
+            RegistrationRecord(deviceUDID: "A", directory: directory, pid: try exitedPid()).takeLeftovers(), [],
             "a program that stopped left none"
         )
-        XCTAssertEqual(other.takeLeftovers().count, 1, "another simulator's record is not touched")
+        XCTAssertEqual(
+            RegistrationRecord(deviceUDID: "B", directory: directory).takeLeftovers().count, 1,
+            "another simulator's record is not touched"
+        )
+    }
+
+    func testAProgramThatIsStillRunningKeepsItsRecordAndAStopOnlyReleasesItsOwn() throws {
+        let directory = makeDirectory()
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["30"]
+        try sleeper.run()
+        let running = RegistrationRecord(deviceUDID: "A", directory: directory, pid: sleeper.processIdentifier)
+        let mine = RegistrationRecord(deviceUDID: "A", directory: directory)
+        let uuids = [UUID()]
+
+        running.write(uuids)
+        XCTAssertEqual(mine.takeLeftovers(), [], "a live program's UUIDs are not unregistered")
+        mine.release()
+
+        sleeper.terminate()
+        sleeper.waitUntilExit()
+        XCTAssertEqual(
+            mine.takeLeftovers(), uuids,
+            "a stop that never wrote the record did not delete it, and once its program is gone it is leftovers"
+        )
     }
 }
