@@ -8,7 +8,7 @@ export type NpmOutcome =
   | { readonly ok: false; readonly message: string };
 
 export interface NpmCli {
-  view(spec: string): Promise<NpmOutcome>;
+  view(spec: string, signal?: AbortSignal): Promise<NpmOutcome>;
   install(spec: string): Promise<NpmOutcome>;
   globalRoot(): Promise<NpmOutcome>;
 }
@@ -30,7 +30,7 @@ export class FakeNpmCli implements NpmCli {
     };
   }
 
-  async view(spec: string): Promise<NpmOutcome> {
+  async view(spec: string, _signal?: AbortSignal): Promise<NpmOutcome> {
     return this.#answer("view", spec);
   }
 
@@ -67,8 +67,8 @@ const MESSAGE_CHARACTERS = 2000;
 export class NodeNpmCli implements NpmCli {
   constructor(private readonly options: NodeNpmCliOptions) {}
 
-  async view(spec: string): Promise<NpmOutcome> {
-    return this.#run(["view", spec, "version"], SHORT_LIMIT_MS, "30 seconds");
+  async view(spec: string, signal?: AbortSignal): Promise<NpmOutcome> {
+    return this.#run(["view", spec, "version"], SHORT_LIMIT_MS, "30 seconds", signal);
   }
 
   async install(spec: string): Promise<NpmOutcome> {
@@ -86,12 +86,18 @@ export class NodeNpmCli implements NpmCli {
     return this.options.filesystem.realpath(join(dirname(node), "npm"));
   }
 
-  async #run(args: readonly string[], timeoutMs: number, limit: string): Promise<NpmOutcome> {
+  async #run(
+    args: readonly string[],
+    timeoutMs: number,
+    limit: string,
+    signal?: AbortSignal,
+  ): Promise<NpmOutcome> {
     const node = this.options.execPath ?? process.execPath;
     const script = await this.#script(node);
     const result = await this.options.runner.run(node, [script, ...args], {
       cwd: this.options.dataDirectory,
       timeoutMs,
+      ...(signal === undefined ? {} : { signal }),
     });
     if (result.code === null) {
       return { ok: false, message: `npm did not finish within ${limit}` };
