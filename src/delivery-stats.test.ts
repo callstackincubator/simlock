@@ -141,7 +141,7 @@ const input = {
     {
       issue: 20,
       createdAt: "2026-10-02T09:00:00Z",
-      body: "## Handoff\n\n### Done\n\nMost of it.\n\n### Blocked on\n\nMaintainer: amend the body.\n\n_Written by an agent._",
+      body: "## Handoff\n\n**Done:** Most of it.\n\n**Blocked on:** Maintainer: amend the body.\n\n_Written by an agent._",
     },
     {
       issue: 21,
