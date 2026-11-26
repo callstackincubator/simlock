@@ -185,10 +185,10 @@ the authoritative wording for it.
 unregisters only in `stop()`, so a program that is SIGKILLed or crashes leaves its frame
 callbacks in the simulator's SimRenderServer, which then logs one `Invalid connection UUID
 specified` fault per rendered frame until the simulator shuts down (#1888). `start` writes the
-UUIDs it registered to a per-simulator file (`RegistrationRecord`, ours, in `SimlockCapture`);
-the next `start` on that simulator unregisters the UUIDs it finds there before registering its
-own, and `stop()` deletes the file. The file's first line is the writer's pid: `start` takes only
-a record whose program is gone, and `stop()` deletes only a record it wrote. The Swift tests prove
+UUIDs it registered to its own file, `simlock-capture-<udid>.<pid>.uuids` (`RegistrationRecord`, ours,
+in `SimlockCapture`); the next `start` on that simulator unregisters the UUIDs it finds in every
+such file whose program is gone, before registering its own, and `stop()` deletes only its own
+file. The Swift tests prove
 the record; that a later program's unregistering silences the faults on a real simulator is not yet
 proven (the slow-lane check is pending). The comment in `FrameCapture.swift` says why.
 
