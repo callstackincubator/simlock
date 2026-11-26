@@ -66,4 +66,30 @@ final class RegistrationRecordTests: XCTestCase {
             "a stop that never wrote the record did not delete it, and once its program is gone it is leftovers"
         )
     }
+
+    func testTwoProgramsThatOverlapOnASimulatorEachLeaveTheirOwnUUIDsWhenKilled() throws {
+        let directory = makeDirectory()
+        let sleepers = try (0..<2).map { _ -> Process in
+            let sleeper = Process()
+            sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            sleeper.arguments = ["30"]
+            try sleeper.run()
+            return sleeper
+        }
+        let uuids = [[UUID()], [UUID()]]
+        for (sleeper, own) in zip(sleepers, uuids) {
+            RegistrationRecord(deviceUDID: "A", directory: directory, pid: sleeper.processIdentifier).write(own)
+        }
+        let next = RegistrationRecord(deviceUDID: "A", directory: directory)
+        XCTAssertEqual(next.takeLeftovers(), [], "both programs still run")
+
+        for sleeper in sleepers {
+            sleeper.terminate()
+            sleeper.waitUntilExit()
+        }
+        XCTAssertEqual(
+            Set(next.takeLeftovers()), Set(uuids.flatMap { $0 }),
+            "the second program's write did not replace the first's record"
+        )
+    }
 }
