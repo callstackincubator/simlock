@@ -46,6 +46,32 @@ async function setup(
   return { capture, clock, filesystem, launcher };
 }
 
+// why: the capture program does not ignore SIGPIPE, so a frame written after its stdout's reader
+// is gone kills it before its stop unregisters its frame callbacks (#1583). This records, for each
+// stdout the driver cancels, whether the program had been asked to stop through stdin by then.
+function watchStdoutCancel(launcher: FakeBytePipeLauncher): boolean[] {
+  const seen: boolean[] = [];
+  const start = launcher.start.bind(launcher);
+  vi.spyOn(launcher, "start").mockImplementation((command, args, options) => {
+    const process = start(command, args, options);
+    const reader = process.stdout.getReader();
+    const stdout = new ReadableStream<Uint8Array>({
+      cancel: async (reason) => {
+        seen.push(process.stdinClosed);
+        await reader.cancel(reason);
+      },
+      pull: async (controller) => {
+        const step = await reader.read();
+        if (step.done) controller.close();
+        else controller.enqueue(step.value);
+      },
+    });
+    Object.defineProperty(process, "stdout", { value: stdout });
+    return process;
+  });
+  return seen;
+}
+
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<number[]> {
   const bytes: number[] = [];
   for await (const chunk of stream) bytes.push(...chunk);
@@ -300,11 +326,13 @@ describe("iOS screen capture", () => {
     expect(launcher.last.kills).toEqual(["SIGKILL"]);
   });
 
-  it("cancelling the body stops the program, and a second close does not stop it again", async () => {
+  it("cancelling the body stops the program through stdin before letting go of its stdout, and a second close does not stop it again", async () => {
     const { capture, launcher } = await setup();
+    const stdinClosedWhenStdoutCancelled = watchStdoutCancel(launcher);
     const feed = await capture.open(simulator, settings, new AbortController().signal);
     await feed.body.cancel();
     await feed.close();
+    expect(stdinClosedWhenStdoutCancelled).not.toContain(false);
     expect(launcher.last.stdinCloses).toBe(1);
     expect(launcher.last.kills).toEqual([]);
     expect(launcher.processes).toHaveLength(1);
