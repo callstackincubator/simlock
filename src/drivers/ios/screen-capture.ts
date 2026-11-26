@@ -140,8 +140,10 @@ function bodyOf(
   const reader = child.stdout.getReader();
   return new ReadableStream<Uint8Array>({
     cancel: async (reason) => {
-      await reader.cancel(reason).catch(() => undefined);
+      // why: the program's stdin closing is its stop signal; letting go of its stdout first breaks
+      // its pipe, and it dies on SIGPIPE before it can stop the stream cleanly.
       await close();
+      await reader.cancel(reason).catch(() => undefined);
     },
     pull: async (controller) => {
       const step = await reader.read().catch((error: unknown) => ({ error }));
