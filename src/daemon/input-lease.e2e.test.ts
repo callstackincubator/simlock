@@ -175,6 +175,7 @@ describe("a lease's input socket", () => {
   }) {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: {
           capabilities: { input: { enabled: options.gatewayInput } },
           http: { enabled: true, host: "127.0.0.1", port },
@@ -190,6 +191,7 @@ describe("a lease's input socket", () => {
     const token = (await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin))
       .secret;
     const worker = await startDaemon({
+      hostLoadProbe: null,
       configOverrides: {
         capabilities: { input: { enabled: options.workerInput } },
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
@@ -243,6 +245,7 @@ describe("a lease's input socket", () => {
     const { clock, proxyAuth } = options;
     const { port, started: worker } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         ...(clock === undefined ? {} : { clock }),
         configOverrides: {
           capabilities: { input: { enabled: true }, stream: { enabled: true } },

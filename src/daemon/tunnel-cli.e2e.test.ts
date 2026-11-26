@@ -80,6 +80,7 @@ describe("simlock tunnel against a lone worker", () => {
     const deviceTcp = new FakeDeviceTcp();
     const { port, started: daemon } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: {
           capabilities: { tunnel: { enabled: true } },
           http: { enabled: true, host: "127.0.0.1", port },

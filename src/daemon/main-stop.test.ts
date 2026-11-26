@@ -102,6 +102,7 @@ describe("startDaemon HTTP gateway startup readiness", () => {
       await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
       const sink = new MemoryLogSink();
       const startPromise = startDaemon({
+        hostLoadProbe: null,
         clock,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
@@ -498,6 +499,7 @@ describe("startDaemon stop with a warm target", () => {
       const daemon = await startUnlessPortLost(
         sink,
         startDaemon({
+          hostLoadProbe: null,
           deviceDataTables: fakeDeviceDataTables,
           clock,
           configOverrides: {
@@ -548,6 +550,7 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
       const restoreListen = delayTcpListen(200);
       try {
         const startPromise = startDaemon({
+          hostLoadProbe: null,
           clock,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
@@ -614,6 +617,7 @@ describe("startDaemon socket race with HTTP enabled", () => {
     const filesystem = new MemoryFilesystem();
     const options = (port: number): StartDaemonOptions =>
       ({
+        hostLoadProbe: null,
         clock: new FakeClock(1_000),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
@@ -668,6 +672,7 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
     const { port } = gateway.address() as { readonly port: number };
     const options = (gatewayUrl?: string): StartDaemonOptions =>
       ({
+        hostLoadProbe: null,
         clock: new FakeClock(1_000),
         configOverrides:
           gatewayUrl === undefined
@@ -730,6 +735,7 @@ describe("startDaemon HTTP gateway bind failure", () => {
     try {
       await expect(
         startDaemon({
+          hostLoadProbe: null,
           clock,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,

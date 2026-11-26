@@ -78,6 +78,7 @@ describe("a screen stream through a gateway", () => {
     directories.push(gatewayDirectory);
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: {
           http: { enabled: true, host: "127.0.0.1", port },
           capabilities: { stream: { enabled: true } },
@@ -99,6 +100,7 @@ describe("a screen stream through a gateway", () => {
     directories.push(workerDirectory);
     const screen = paintingScreen();
     const worker = await startDaemon({
+      hostLoadProbe: null,
       configOverrides: {
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
         capabilities: { stream: { enabled: workerStreams } },
@@ -273,6 +275,7 @@ describe("a lease stream on a standalone worker", () => {
     directories.push(directory);
     const { port, started: worker } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: {
           capabilities: { stream: { enabled: streamEnabled } },
           http: { enabled: true, host: "127.0.0.1", port },

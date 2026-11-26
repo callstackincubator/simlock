@@ -125,6 +125,7 @@ describe("a lease's tunnel socket", () => {
     directories.push(path);
     const { port, started: daemon } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: {
           capabilities: { tunnel: { enabled } },
           http: { enabled: true, host: "127.0.0.1", port },
@@ -178,6 +179,7 @@ describe("a lease's tunnel socket", () => {
     const clock = options.clock === undefined ? {} : { clock: options.clock };
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         ...clock,
         configOverrides: {
           capabilities: { input, tunnel: { enabled: options.gatewayTunnel } },
@@ -195,6 +197,7 @@ describe("a lease's tunnel socket", () => {
       .secret;
     const deviceTcp = new FakeDeviceTcp();
     const worker = await startDaemon({
+      hostLoadProbe: null,
       ...clock,
       configOverrides: {
         capabilities: { input, tunnel: { enabled: options.workerTunnel } },
@@ -549,6 +552,7 @@ describe("a lease's tunnel socket", () => {
       directories.push(path);
       const start = async (deviceTcp: FakeDeviceTcp): Promise<DaemonServer> =>
         await startDaemon({
+          hostLoadProbe: null,
           configOverrides: { http: { enabled: false } },
           dataDirectory: path,
           deviceDataTables: fakeDeviceDataTables,

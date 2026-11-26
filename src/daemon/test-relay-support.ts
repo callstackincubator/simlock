@@ -166,6 +166,7 @@ export async function startWorker(
   directories.push(directory);
   const logger = new RecordingLogger();
   const options: StartDaemonOptions = {
+    hostLoadProbe: null,
     // why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a relay test asks for neither.
     configOverrides: {
       capabilities: { "agent-device": { enabled: false } },
@@ -341,6 +342,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const taps: TappedTransport[] = [];
   const { port, started: gateway } = await startOnFreePort((candidate) =>
     startDaemon({
+      hostLoadProbe: null,
       configOverrides: {
         http: {
           enabled: true,

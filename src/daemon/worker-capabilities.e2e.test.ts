@@ -38,6 +38,7 @@ describe("a worker's capabilities through a gateway", () => {
     directories.push(gatewayDirectory);
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         role: "gateway",
         dataDirectory: gatewayDirectory,
@@ -57,6 +58,7 @@ describe("a worker's capabilities through a gateway", () => {
     const workerDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-caps-worker-"));
     directories.push(workerDirectory);
     const worker = await startDaemon({
+      hostLoadProbe: null,
       configOverrides: {
         capabilities: { "agent-device": { enabled: options.enabled ?? true } },
         gateway: { label: "worker-a", token: secret, url: `ws://127.0.0.1:${String(port)}` },

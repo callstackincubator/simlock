@@ -68,6 +68,7 @@ describe("device.rotate", () => {
       }),
     ];
     const daemon = await startDaemon({
+      hostLoadProbe: null,
       configOverrides: {
         capabilities: { input: { enabled: options.inputModule } },
         ...(options.gateway === undefined ? {} : { gateway: options.gateway }),
@@ -601,6 +602,7 @@ describe("device.rotate", () => {
       directories.push(gatewayDirectory);
       const { port: gatewayPort, started: gateway } = await startOnFreePort(async (gatewayPort) =>
         startDaemon({
+          hostLoadProbe: null,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port: gatewayPort } },
           dataDirectory: gatewayDirectory,
           filesystem: new MemoryFilesystem(),

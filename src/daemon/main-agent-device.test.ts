@@ -128,6 +128,7 @@ describe("startDaemon with the agent-device edge", () => {
     const clock = ports.clock ?? new FakeClock(1_000);
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
+      hostLoadProbe: null,
       clock,
       dataDirectory: setup.directory,
       directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
