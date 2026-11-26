@@ -189,8 +189,8 @@ UUIDs it registered to its own file, `simlock-capture-<udid>.<pid>.uuids` (`Regi
 in `SimlockCapture`); the next `start` on that simulator unregisters the UUIDs it finds in every
 such file whose program is gone, before registering its own, and `stop()` deletes only its own
 file. The Swift tests prove
-the record; that a later program's unregistering silences the faults on a real simulator is not yet
-proven (the slow-lane check is pending). The comment in `FrameCapture.swift` says why.
+the record; `e2e/slow-ios-stream.test.ts` shows on a real simulator that a later program's
+unregistering silences the faults. The comment in `FrameCapture.swift` says why.
 
 One mechanical consequence of flattening two upstream targets into one:
 `FrameCapture.swift` and `HIDInjector.swift` no longer say `import SimNativeSupport`, because there is
