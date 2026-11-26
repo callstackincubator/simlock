@@ -301,3 +301,46 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
     }
   });
 });
+
+describe("IosSimctlDriver Simulator.app clipboard advisory", () => {
+  it("under deviceSet default, advisories() warns while Simulator.app is running and says nothing once it has quit", async () => {
+    // why: Simulator.app syncs the Mac clipboard into every simulator it attaches to, whatever DeviceHub's pasteboardSyncEnabled says (#1580).
+    let simulatorPids = "75224\n";
+    const answer = (command: string, args: readonly string[]) => {
+      const pgrepsSimulator = /(^|\/)pgrep$/.test(command) && args.includes("Simulator");
+      if (!pgrepsSimulator) return { code: 1, stderr: `unexpected ${command}`, stdout: "" };
+      return { code: simulatorPids === "" ? 1 : 0, stderr: "", stdout: simulatorPids };
+    };
+    const spawn: ProcessRunner["spawn"] = (command, args, options) =>
+      new ScriptedProcessRunner([
+        { match: { args: [...args], command }, result: answer(command, args) },
+      ]).spawn(command, args, options);
+    const driver = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
+      clock: new FakeClock(),
+      coreSimulatorRoot: "/Users/u/Library/Developer/CoreSimulator",
+      driverConfig: { deviceSet: "default" },
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: {
+        run: (command, args, options) => spawn(command, args, options).wait(),
+        spawn,
+        spawnStreaming: () => {
+          throw new Error("the driver streams nothing here");
+        },
+      },
+      simlockHome: "/home/.simlock",
+    });
+
+    await expect(driver.advisories()).resolves.toEqual([
+      {
+        code: "simulator-app-clipboard-sync",
+        message: expect.stringContaining("Simulator.app"),
+      },
+    ]);
+
+    simulatorPids = "";
+    await expect(driver.advisories()).resolves.toEqual([]);
+  });
+});
