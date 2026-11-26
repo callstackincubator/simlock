@@ -96,7 +96,7 @@ describe("startDaemon with the agent-device edge", () => {
   function versionAndDaemon(directory: string, role?: "phones"): ScriptedProcessRunner {
     const version = {
       match: { args: [realCli, "--version"], command: process.execPath },
-      result: { code: 0, stderr: "", stdout: "0.21.28\n" },
+      result: { code: 0, stderr: "", stdout: "0.21.40\n" },
     };
     const daemon = (marker: readonly string[]) => ({
       hangs: true,
@@ -207,12 +207,12 @@ describe("startDaemon with the agent-device edge", () => {
   it("stops both agent-device daemons when the worker stops, the phone daemon and the simulator daemon each by its own pid", async () => {
     const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const health = new FakeAgentDeviceHealth();
-    health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
+    health.respondWith({ rpcProtocolVersion: 3, service: "agent-device-daemon" });
     const tcpProbe = new FakeTcpProbe();
     const processSupervisor = new KillingSupervisor();
     const version = {
       match: { args: [realCli, "--version"], command: process.execPath },
-      result: { code: 0, stderr: "", stdout: "0.21.28\n" },
+      result: { code: 0, stderr: "", stdout: "0.21.40\n" },
     };
     const daemonAt = (stateDirName: string, pid: number, port: number, marker: string[]) => ({
       hangs: true,
@@ -546,7 +546,7 @@ describe("startDaemon with the agent-device edge", () => {
         .toMatchObject({
           kind: "module-unavailable",
           module: "agent-device",
-          message: expect.stringContaining("found 0.20.3, need 0.21.28 or later"),
+          message: expect.stringContaining("found 0.20.3, need 0.21.40 or later"),
           remedy: expect.any(String),
         });
       await expect(daemon.dispatch("lease.request", lease, agent)).resolves.toMatchObject({
@@ -568,7 +568,7 @@ describe("startDaemon with the agent-device edge", () => {
     ): ScriptedProcessRunner {
       if (simulator === "missing") return new ScriptedProcessRunner([]);
       return new ScriptedProcessRunner([
-        version(simulator === "running" ? "0.21.28\n" : simulator),
+        version(simulator === "running" ? "0.21.40\n" : simulator),
         {
           hangs: true,
           match: { args: [entry, `--simlock-home=${setup.home}`], command: process.execPath },
@@ -580,7 +580,7 @@ describe("startDaemon with the agent-device edge", () => {
             tcpProbe.startListening(4310);
           },
         },
-        version(phones === undefined || phones === "unstartable" ? "0.21.28\n" : phones),
+        version(phones === undefined || phones === "unstartable" ? "0.21.40\n" : phones),
       ]);
     }
 
@@ -640,7 +640,7 @@ describe("startDaemon with the agent-device edge", () => {
           },
         });
         const health = new FakeAgentDeviceHealth();
-        health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
+        health.respondWith({ rpcProtocolVersion: 3, service: "agent-device-daemon" });
         const tcpProbe = new FakeTcpProbe();
         const runner = scriptedDaemons(setup, tcpProbe, simulator, phones);
         const { clock, daemon } = await startEdge(setup, {

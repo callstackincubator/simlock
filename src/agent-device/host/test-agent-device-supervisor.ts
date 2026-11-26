@@ -43,7 +43,7 @@ export const httpPort = 4310;
 
 export const token = "daemon-token";
 
-export const healthyBody = { rpcProtocolVersion: 2, service: "agent-device-daemon" };
+export const healthyBody = { rpcProtocolVersion: 3, service: "agent-device-daemon" };
 
 export const restartCommand = ["simlock daemon stop", "simlock daemon start"];
 
@@ -172,7 +172,7 @@ export async function arrange(options: Options = {}) {
           httpPort,
           pid: mode === "ready" ? pid : pid + 1_000,
           token,
-          version: "0.21.28",
+          version: "0.21.40",
         }),
       );
     }
@@ -267,7 +267,7 @@ async function installAgentDevice(
   await options.layout?.(filesystem);
 }
 
-export function versionRun(output = "0.21.28\n", extra: Partial<ScriptedProcessExpectation> = {}) {
+export function versionRun(output = "0.21.40\n", extra: Partial<ScriptedProcessExpectation> = {}) {
   return {
     match: { args: [realCli, "--version"], command: nodePath },
     result: { code: 0, stderr: "", stdout: output },

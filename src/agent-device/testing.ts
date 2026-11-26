@@ -440,13 +440,14 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     const tenantHeader = request.headers.get("x-agent-device-tenant") ?? undefined;
     if (url.pathname === "/health") {
       this.requests.push({ method: request.method, path: url.pathname, tenant: tenantHeader });
-      return Response.json({ ok: true, rpcProtocolVersion: 2, service: "agent-device-daemon" });
+      return Response.json({ ok: true, rpcProtocolVersion: 3, service: "agent-device-daemon" });
     }
     if (url.pathname === "/upload/preflight") {
       this.preflightHeaders.push(Object.fromEntries(request.headers));
       this.requests.push({ method: request.method, path: url.pathname, tenant: tenantHeader });
       return Response.json({
         ok: true,
+        uploadId: "ticket-1",
         upload: { headers: {}, url: `${this.baseUrl}/upload/direct/ticket-1` },
       });
     }

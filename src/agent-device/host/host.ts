@@ -146,6 +146,8 @@ export class AgentDeviceHost {
           authenticate: (tagged) => this.authenticate(tagged),
           upstreamBaseUrl: current.baseUrl,
           upstreamFetch: (upstream) => this.#upstreamFetch(upstream),
+          // why: unset, @agent-device/proxy 0.21.41 leaves an RPC call to the agent-device daemon as long as the client waits (only health and transfers keep their own limits); 0.21.36 cut every upstream call at 300 s.
+          upstreamTimeoutMs: 300_000,
           upstreamToken: current.token,
         }),
       };
@@ -180,6 +182,9 @@ export class AgentDeviceHost {
     if (url.pathname === FRONT_PREFIX || url.pathname.startsWith(`${FRONT_PREFIX}/`)) {
       url.pathname = PROXY_BASE_PATH + url.pathname.slice(FRONT_PREFIX.length);
     }
+    // why: simlock serves plain HTTP behind a TLS tunnel, and since 0.21.41 the proxy builds the upload ticket URL from `request.url` alone, so the tunnel's scheme (the first `x-forwarded-proto`) goes into it.
+    const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+    if (forwarded === "http" || forwarded === "https") url.protocol = forwarded;
     return new Request(url, {
       headers: request.headers,
       method: request.method,

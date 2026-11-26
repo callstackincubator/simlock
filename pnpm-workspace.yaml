@@ -3,6 +3,10 @@ packages:
 allowBuilds:
   "@ast-grep/cli": true
   lefthook: true
+minimumReleaseAgeExclude:
+  - "@e2e-dev/core@0.25.0"
+  - "@e2e-dev/mobile@0.12.9"
+  - e2e@0.25.0
 overrides:
   "@hono/node-server": 2.1.6
   ip-address: ">=10.3.1"

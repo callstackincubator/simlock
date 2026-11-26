@@ -8,6 +8,7 @@ import {
   MemoryLogSink,
   ScriptedProcessRunner,
 } from "../ports/index.js";
+import { AGENT_DEVICE_RPC_PROTOCOL_VERSION } from "./shared/compatibility.js";
 import { FakeAgentDevice, FakeAgentDeviceHealth } from "./testing.js";
 import { AgentDeviceSupervisor } from "./host/agent-device-supervisor.js";
 import { SupervisorAgentDeviceUpstream } from "./host/upstream.js";
@@ -108,13 +109,14 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(rig.fake.requests).toHaveLength(received);
   });
 
-  it("/v1/agent-device/health with a simlock token answers the proxy's health, with the agent-device daemon's health under `upstream`", async () => {
+  it("/v1/agent-device/health with a simlock token answers the proxy's health on the RPC protocol simlock requires, with the agent-device daemon's health under `upstream`", async () => {
     const rig = await setUp();
 
     const response = await send(rig, "/health");
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
+      rpcProtocolVersion: AGENT_DEVICE_RPC_PROTOCOL_VERSION,
       service: "agent-device-proxy",
       upstream: { service: "agent-device-daemon" },
     });
@@ -122,7 +124,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
   it("with capabilities.agent-device.enabled true and agent-device unavailable, /health, /rpc and an upload each answer `agent-device is not available on this simlock: <reason>`, nothing is leased, and POST /v1/lease-requests still grants a device", async () => {
     const rig = await setUp();
-    const reason = "found 0.20.3, need 0.21.28 or later";
+    const reason = "found 0.20.3, need 0.21.40 or later";
     rig.fake.setUnavailable(reason);
 
     const health = await send(rig, "/health");
@@ -147,7 +149,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     });
     for (const [version, reason, retriable] of [
       ["0.20.3", "wrong-version", false],
-      ["0.21.28", "start-failed", true],
+      ["0.21.40", "start-failed", true],
     ] as const) {
       const supervisorUpstream = await unavailableSupervisor(version, reason);
       const supervised = await setUp({ supervisorUpstream });
@@ -229,7 +231,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await expect.poll(() => rig.fake.abortedCommands).toEqual(["snapshot"]);
   });
 
-  it("an upload preflight answers a ticket URL under `/v1/agent-device/upload/direct/` on simlock's own origin, carrying the agent's own simlock token, and a `PUT` to it reaches the agent-device daemon", async () => {
+  it("an upload preflight answers a ticket URL under `/v1/agent-device/upload/direct/` on simlock's own origin (`https` when the request carries `x-forwarded-proto: https`), carrying the agent's own simlock token, and a `PUT` to it reaches the agent-device daemon", async () => {
     const rig = await setUp();
 
     const preflight = await send(rig, "/upload/preflight", { body: "{}" });
@@ -252,6 +254,17 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     expect(put.status).toBe(200);
     expect(rig.fake.uploads).toEqual(["artifact bytes"]);
+
+    const behindTls = await send(rig, "/upload/preflight", {
+      body: "{}",
+      headers: { "x-forwarded-proto": "https, http" },
+    });
+    const tlsTicket = ((await behindTls.json()) as { upload: { url: string } }).upload;
+    expect(
+      tlsTicket.url.startsWith(
+        `${rig.origin.replace("http:", "https:")}/v1/agent-device/upload/direct/`,
+      ),
+    ).toBe(true);
   });
 
   it("on a worker, an upload preflight and an artifact download follow the `x-agent-device-lease-id` header to the daemon of the lease it names, go to the simulator daemon with no header, and a header naming another token's lease is refused 403 `refused: lease <id> is not one of yours`, and a malformed header is refused `the x-agent-device-lease-id header is not a lease id`", async () => {

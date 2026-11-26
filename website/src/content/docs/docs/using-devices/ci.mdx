@@ -15,7 +15,7 @@ This page uses the [`e2e` runner](https://www.npmjs.com/package/@e2e-dev/mobile)
 
 - A farm whose HTTP API the CI runner can reach over HTTPS: a gateway or a standalone worker.
 - agent-device on, on the farm ([Drive an app's UI with agent-device](/simlock/docs/using-devices/agent-device)). The provider talks to `<url>/v1/agent-device`.
-- A project that already runs with `@e2e-dev/mobile` 0.12.5 or newer.
+- A project that already runs with `@e2e-dev/mobile` 0.12.9 or newer.
 
 ## Set up the job
 
@@ -34,10 +34,10 @@ This page uses the [`e2e` runner](https://www.npmjs.com/package/@e2e-dev/mobile)
 4. **Install the provider:**
 
    ```sh
-   npm install --save-dev @simlock/e2e agent-device@0.21.39 simlock
+   npm install --save-dev @simlock/e2e agent-device@0.21.42 simlock
    ```
 
-   `agent-device` 0.21.37 through 0.21.39 is a peer dependency: the provider uses your copy of its client. 0.21.40 and later are not supported yet ([#1800](https://github.com/callstackincubator/simlock/issues/1800)). `@simlock/e2e` has the version number of the Simlock release it was tested with; use the one that matches your farm. `simlock` is for the cleanup step.
+   `agent-device` 0.21.40 or newer is a peer dependency: the provider uses your copy of its client. `@simlock/e2e` has the version number of the Simlock release it was tested with; use the one that matches your farm. `simlock` is for the cleanup step.
 
 5. **Configure the runner:**
 

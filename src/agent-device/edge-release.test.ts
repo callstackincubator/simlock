@@ -80,14 +80,14 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(allocatesReceived(bare, 2)).toEqual([]);
   });
 
-  it("an agent-device allocate with no usable reply (an unreachable daemon, a non-JSON body) releases the simlock lease and answers `COMMAND_FAILED`; when agent-device answers the follow-up release with a scope error, the simlock lease stays until its TTL, and when it answers `LEASE_NOT_FOUND`, the simlock lease is released", async () => {
+  it("an agent-device allocate to an unreachable daemon answers the proxy's `UNKNOWN` error and one with a non-JSON body answers `COMMAND_FAILED`, and each releases the simlock lease; when agent-device answers the follow-up release with a scope error, the simlock lease stays until its TTL, and when it answers `LEASE_NOT_FOUND`, the simlock lease is released", async () => {
     const rig: Rig = await setUp();
     expect((await envelopeOf(await allocate(rig, 1))).result).toMatchObject({ ok: true });
     rig.fake.setUnreachable(true);
     const unreachable = await envelopeOf(await allocate(rig, 2));
     rig.fake.setUnreachable(false);
 
-    expect(unreachable.error?.data?.code).toBe("COMMAND_FAILED");
+    expect(unreachable.error?.data).toMatchObject({ code: "UNKNOWN", message: "fetch failed" });
     await expect.poll(async () => (await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
 
     rig.fake.answerNextAllocateWith("<html>bad gateway</html>");

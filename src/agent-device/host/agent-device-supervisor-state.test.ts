@@ -163,7 +163,7 @@ describe("AgentDeviceSupervisor pid record", () => {
 });
 
 describe("AgentDeviceSupervisor readiness", () => {
-  it("is running with the version, base URL, token and generation 1 once daemon.json names the child, the port listens and /health answers protocol 2", async () => {
+  it("is running with the version, base URL, token and generation 1 once daemon.json names the child, the port listens and /health answers protocol 3", async () => {
     const harness = await run();
 
     expect(harness.availability()).toEqual({
@@ -173,7 +173,7 @@ describe("AgentDeviceSupervisor readiness", () => {
       platforms: ["ios", "android"],
       state: "running",
       token,
-      version: "0.21.28",
+      version: "0.21.40",
     });
     expect(harness.health.reads).toContain(`http://127.0.0.1:${httpPort}`);
   });
@@ -187,7 +187,7 @@ describe("AgentDeviceSupervisor readiness", () => {
     const pid = harness.children[0]?.pid;
     await harness.filesystem.writeFileAtomic(
       daemonJsonPath,
-      JSON.stringify({ httpPort, pid, token, version: "0.21.28" }),
+      JSON.stringify({ httpPort, pid, token, version: "0.21.40" }),
     );
     harness.probe.startListening(httpPort);
     await advanceUntil(harness, () => stateOf(harness) === "running", 10_000);
@@ -220,17 +220,17 @@ describe("AgentDeviceSupervisor readiness", () => {
     expect(stateOf(harness)).toBe("running");
   });
 
-  it("stops the child and reports wrong-version naming both protocols when /health answers protocol 3", async () => {
+  it("stops the child and reports wrong-version naming both protocols when /health answers protocol 2", async () => {
     const harness = await arrange();
-    harness.health.respondWith({ rpcProtocolVersion: 3, service: "agent-device-daemon" });
+    harness.health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
 
     await advancing(harness, harness.begin());
 
     expect(unavailable(harness)).toMatchObject({
-      message: "agent-device 0.21.28 speaks RPC protocol 3, need 2",
+      message: "agent-device 0.21.40 speaks RPC protocol 2, need 3",
       reason: "wrong-version",
     });
-    expect(unavailable(harness).remedy).toContain("RPC protocol 2");
+    expect(unavailable(harness).remedy).toContain("RPC protocol 3");
     for (const phrase of restartCommand) expect(unavailable(harness).remedy).toContain(phrase);
     expect(harness.processes.signals).toEqual([
       { pid: harness.children[0]?.pid, signal: "SIGTERM" },
