@@ -197,6 +197,7 @@ export async function startGateway(
   const clock = new FakeClock(1_000);
   const { started: daemon } = await startOnFreePort((port) =>
     startDaemon({
+      hostLoadProbe: null,
       clock,
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       role: "gateway",

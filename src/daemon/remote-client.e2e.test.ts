@@ -34,6 +34,7 @@ describe("the typed client over a worker's session path", () => {
     directories.push(directory);
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,

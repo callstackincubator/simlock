@@ -306,6 +306,7 @@ describe("startDaemon startup readiness", () => {
     const clock = new FakeClock(1_000);
     const socketPath = resolveDaemonSocketPath(directory);
     const startPromise = startDaemon({
+      hostLoadProbe: null,
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -490,6 +491,7 @@ describe("daemon role (ADR 0034)", () => {
     try {
       const { started: daemon } = await startOnFreePort((port) =>
         startDaemon({
+          hostLoadProbe: null,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           drivers: [],
           deviceDataTables: fakeDeviceDataTables,

@@ -290,7 +290,23 @@ describe("startDaemon in gateway mode host load", () => {
   });
 
   it("a gateway started with no hostLoadProbe builds the production probe, the same factory a worker uses", async () => {
-    const { daemon } = await startGateway({});
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-gw-default-probe-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    // why: the gateway helper passes no probe by building none, and this test needs the daemon's own default.
+    const { started: daemon } = await startOnFreePort((port) =>
+      startDaemon({
+        clock,
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        role: "gateway",
+        dataDirectory: directory,
+        drivers: [],
+        filesystem: new MemoryFilesystem(),
+        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+        version: "1.2.3",
+      } as StartDaemonOptions),
+    );
+    runningDaemons.push(daemon);
 
     await expect
       .poll(

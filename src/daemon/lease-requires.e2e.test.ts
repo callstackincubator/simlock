@@ -56,6 +56,7 @@ describe("lease.request requires, through a gateway", () => {
     directories.push(directory);
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         role: "gateway",
         dataDirectory: directory,
@@ -86,6 +87,7 @@ describe("lease.request requires, through a gateway", () => {
     const fake = new FakeAgentDevice();
     if (options.capability === "unavailable") fake.setUnavailable("down");
     const daemon = await startDaemon({
+      hostLoadProbe: null,
       configOverrides: {
         capabilities: { "agent-device": { enabled: options.capability !== "off" } },
         capacity: { config: { maxRunning: options.maxRunning ?? 2 }, strategy: "fixed" },

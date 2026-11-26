@@ -240,6 +240,7 @@ describe("optional modules: afterSocketClaimed", () => {
         ipc?: StartDaemonOptions["ipc"],
       ) =>
         ({
+          hostLoadProbe: null,
           clock: new FakeClock(1_000),
           configOverrides: { capabilities: { alpha: { enabled: true } }, http: { enabled: false } },
           dataDirectory: directory,

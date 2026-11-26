@@ -98,6 +98,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const start = async (port: number) => {
     const logs = new MemoryLogSink();
     const starting = startDaemon({
+      hostLoadProbe: null,
       clock,
       configOverrides:
         options.defaults === undefined

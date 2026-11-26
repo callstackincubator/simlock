@@ -183,6 +183,7 @@ describe("the session path", () => {
     });
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
+        hostLoadProbe: null,
         ...(clock === undefined ? {} : { clock }),
         configOverrides: {
           // why: the default capacity derives from the host's CPUs, and a 4-CPU runner allows one Android device while this file holds two leases at once.

@@ -255,6 +255,7 @@ describe("startDaemon wires core and leasing together", () => {
     ]);
 
     const daemon = await startDaemon({
+      hostLoadProbe: null,
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -299,6 +300,7 @@ describe("startDaemon wires core and leasing together", () => {
     state.close();
 
     const daemon = await startDaemon({
+      hostLoadProbe: null,
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -323,6 +325,7 @@ describe("startDaemon wires core and leasing together", () => {
     temporaryDirectories.push(directory);
     const options = () =>
       ({
+        hostLoadProbe: null,
         clock,
         configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
@@ -378,6 +381,7 @@ describe("startDaemon wires core and leasing together", () => {
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const options = () =>
       ({
+        hostLoadProbe: null,
         clock,
         configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
