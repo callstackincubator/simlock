@@ -220,10 +220,10 @@ function processEnv(
   };
 }
 
-// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test gets neither unless it asks, and two daemons would clash on port 4701. A gateway keeps its HTTP, which it cannot do without.
 // why: the daemon's version check runs `npm view simlock@latest` at every start (`update.check` is on by default), and a lane daemon must not ask the registry (#1885).
 const NO_UPDATE_CHECK = { update: { check: false } } as const;
 
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test gets neither unless it asks, and two daemons would clash on port 4701. A gateway keeps its HTTP, which it cannot do without.
 const STANDALONE_OFF: Record<string, unknown> = {
   capabilities: { "agent-device": { enabled: false } },
   http: { enabled: false },
