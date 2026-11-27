@@ -142,9 +142,9 @@ gh issue view <N> --json number,title,labels,assignees,body
 - `feature:planned`: walk its open sub-issues (step 3).
 - `bug:new`, unassigned: triage, then the fast track (delivery rules 8
   and 17). With no triage report on the thread, or a person's reply newer
-  than the last one, run the `triage-bug` procedure: start one
-  `bug-triager` in the background with the issue number and wait for its
-  report. Then, unless the run was started with `no-fast-track`:
+  than the last one, start one `bug-triager` in the background with the
+  issue number and wait for its report. Then, unless the run was started
+  with `no-fast-track`:
 
   ```bash
   node .agents/scripts/fast-track.mjs <N>
@@ -210,7 +210,9 @@ they name; never build again or restart review at round 1.
      base-sha the previous check used>`, so the inputs script can map the
      previous commit across the rebase.
    - `Rerun: none` with unresolved nonmechanical findings or unchecked fixes
-     at the cap: park. Mechanical changes get a coordinator diff check.
+     at the cap: park; but once per PR, when every open finding has a Fix
+     line and `Spec needs` is none, first one more fix run and `fix-check`.
+     Mechanical changes get a coordinator diff check.
    - Commits after reviews passed, including conflict resolutions and CI
      test fixes, need the applicable targeted fix-check before the gate.
      A clean base merge alone needs no repeat review; record its new head
@@ -260,9 +262,8 @@ they name; never build again or restart review at round 1.
      [--rejected <file>] [--incomplete <why>]
    ```
 
-   - `--round`: one per check in order, `<r>` being `1`, `2` or `fix-check`,
-     each SHA the
-     `Commit` its report gave.
+   - `--round`: one per check in order, the SHA its report's `Commit`, `<r>`
+     `1`, `2` or `fix-check:<review|ci|merge|hardware>`: what its commits answered.
    - `--skipped`: the reviews the diff's kind left out, such as `spec` for
      a refactor or `code,claims` for an ADR-only diff.
    - `--notes`: a file of every Notes line of the reports, each

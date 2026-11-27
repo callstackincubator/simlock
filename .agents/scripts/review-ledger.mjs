@@ -10,16 +10,21 @@
 // (`- <role>: <claim> [incorrect|intentional|nonblocking] — <reason>`), `--incomplete` why
 // coverage is not complete. Tokens come from usage.mjs (`n/a` without a transcript).
 //
-// The comment: one `Round <r>: <full sha>` line per --round, in the order given (<r> is 1, 2 or
-// fix-check; a short sha is expanded), then what `review-metrics.mjs --pr <pr> --issue <n>
-// --findings <file>` prints, in a code block, then the findings file in a `json` code block,
-// then `*Written by an agent.*`. It refuses (exit 2, nothing posted) a sha that is no commit
-// after fetching the PR's head, a findings file review-metrics.mjs rejects, and a finding with no
-// `round` or a round no --round names; it warns on stderr when a sha is not in the PR head's
-// history. It updates the PR's existing comment headed `## Review ledger`, else posts a new one,
-// prints `ledger: updated <comment url>` or `ledger: posted <url>`, sets the body's Review section
-// through issue-body.mjs, then runs `pr-body-check.mjs <pr>`, prints its output and exits with
-// its code. `--dry-run` prints the comment and the section and does none of it. Usage errors exit 2. The repo is GH_REPO, else the origin remote's owner/name.
+// The comment: one `Round <r>: <full sha>` line per --round, in the order given (a short sha is
+// expanded). <r> is 1, 2 or `fix-check:<trigger>`, the trigger being what the checked commits
+// answered: `review` findings, red `ci`, a `merge` of the base or a `hardware` loop; its line is
+// `Round fix-check: <full sha> <trigger>`. Each review fix-check after the first is one past
+// the cap (REVIEW.md), counted on a line `extension: <n>`. Then what
+// `review-metrics.mjs --pr <pr> --issue <n> --findings <file>` prints, in a code block, then
+// the findings file in a `json` code block, then `*Written by an agent.*`. It refuses (exit 2,
+// nothing posted) a sha that is no commit after fetching the PR's head, a fix-check with no
+// trigger, a findings file review-metrics.mjs rejects, and a finding with no `round` or a round
+// no --round names; it warns on stderr when a sha is not in the PR head's history. It updates
+// the PR's existing comment headed `## Review ledger`, else posts a new one, prints `ledger:
+// updated <comment url>` or `ledger: posted <url>`, sets the body's Review section through
+// issue-body.mjs, then runs `pr-body-check.mjs <pr>`, prints its output and exits with its
+// code. `--dry-run` prints the comment and the section and does none of it. Usage errors exit
+// 2. The repo is GH_REPO, else the origin remote's owner/name.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,7 +34,7 @@ import { option } from "./cli-args.mjs";
 import { reviewSection } from "./review-section.mjs";
 
 const USAGE =
-  "usage: review-ledger.mjs <pr> --issue <n> --findings <file.json> --round <r>:<sha> [--round ...] [--skipped <roles>] [--notes <file>] [--rejected <file>] [--incomplete <why>] [--dry-run]";
+  "usage: review-ledger.mjs <pr> --issue <n> --findings <file.json> --round <1|2|fix-check:<ci|merge|review|hardware>>:<sha> [--round ...] [--skipped <roles>] [--notes <file>] [--rejected <file>] [--incomplete <why>] [--dry-run]";
 const argv = process.argv.slice(2);
 const pr = argv[0];
 const issue = option("--issue");
@@ -66,31 +71,19 @@ try {
 }
 const lines = [];
 let wrong = null;
+let reviewChecks = 0;
 for (const round of rounds) {
-  const m = /^(1|2|fix-check):([0-9a-f]{7,40})$/.exec(round);
+  const m = /^(?:(1|2)|fix-check:(ci|merge|review|hardware)):([0-9a-f]{7,40})$/.exec(round);
   if (m === null) {
-    wrong = `--round ${round}: want <1|2|fix-check>:<sha>`;
+    wrong = `--round ${round}: want <1|2>:<sha> or fix-check:<ci|merge|review|hardware>:<sha>, the trigger being what the checked commits answered`;
     break;
   }
-  const full = spawnSync("git", ["rev-parse", "--verify", "-q", `${m[2]}^{commit}`], {
-    encoding: "utf8",
-  });
-  if (full.status !== 0) {
-    wrong = `--round ${round}: ${m[2]} is no commit here, even after fetching PR #${pr}'s head`;
-    break;
-  }
-  const sha = full.stdout.trim();
-  const reached = spawnSync("git", [
-    "merge-base",
-    "--is-ancestor",
-    sha,
-    `refs/review-ledger/${pr}`,
-  ]);
-  if (reached.status !== 0) {
-    console.error(`review-ledger: warning: round ${m[1]} ${sha} is not in PR #${pr}'s history`);
-  }
-  lines.push(`Round ${m[1]}: ${sha}`);
+  const sha = commitOf("--round", round, m[3], `round ${m[1] ?? "fix-check"}`);
+  if (sha === null) break;
+  if (m[2] === "review") reviewChecks += 1;
+  lines.push(m[2] === undefined ? `Round ${m[1]}: ${sha}` : `Round fix-check: ${sha} ${m[2]}`);
 }
+if (reviewChecks > 1) lines.push(`extension: ${reviewChecks - 1}`);
 spawnSync("git", ["update-ref", "-d", `refs/review-ledger/${pr}`]);
 if (wrong !== null) refuse(wrong);
 
@@ -116,6 +109,8 @@ if (metrics.status !== 0) {
   const why = metrics.stderr.split("\n").find((l) => /^\w*Error: /.test(l)) ?? metrics.stderr;
   refuse(`review-metrics.mjs rejected the findings: ${why.trim()}`);
 }
+// why: review-metrics.mjs wrote each normalised class back to the file, and the ledger posts those.
+findings = JSON.parse(readFileSync(findingsFile, "utf8"));
 
 const comment = [
   "## Review ledger",
@@ -196,6 +191,28 @@ const check = spawnSync("node", [join(here, "pr-body-check.mjs"), pr], { encodin
 process.stdout.write(check.stdout);
 process.stderr.write(check.stderr);
 process.exit(check.status ?? 1);
+
+// why: null after setting `wrong`, so the fetched ref is deleted before the script refuses.
+function commitOf(flag, value, short, what) {
+  const full = spawnSync("git", ["rev-parse", "--verify", "-q", `${short}^{commit}`], {
+    encoding: "utf8",
+  });
+  if (full.status !== 0) {
+    wrong = `${flag} ${value}: ${short} is no commit here, even after fetching PR #${pr}'s head`;
+    return null;
+  }
+  const sha = full.stdout.trim();
+  const reached = spawnSync("git", [
+    "merge-base",
+    "--is-ancestor",
+    sha,
+    `refs/review-ledger/${pr}`,
+  ]);
+  if (reached.status !== 0) {
+    console.error(`review-ledger: warning: ${what} ${sha} is not in PR #${pr}'s history`);
+  }
+  return sha;
+}
 
 function refuse(message) {
   console.error(message.startsWith("usage:") ? message : `review-ledger: ${message}`);

@@ -6,24 +6,25 @@ effort: low
 autoCompactWindow: 300000
 background: true
 tools: Bash, Read, Grep
+omitClaudeMd: true
 ---
 
 # Verify in the slow lane
 
 Rules: `docs/internal/agent-rules/delivery.md` rule 16. The slow lane's
-script, lock and machine checks are in `toolchain.md`, under "Slow lane".
+script, lock and machine checks are in your prompt, under `toolchain.md, "Slow lane"` (not there: read the file).
 You run the lane, read its result, and report. You fix nothing.
 
 Arguments: `pr`, `branch`, `lines` (Done when line numbers, counted in the
 PR body's checklist), `files`, the test files that cover them, if
 known, `attempt`, the number of this lane run for the PR (1 when
 absent), and `known`, tests a fix run showed to fail without the PR. This machine's settings, such as which build of another tool to
-use, come from the lane script (`toolchain.md`), never from your prompt.
+use, come from the lane script (that section), never from your arguments.
 
 ## 1. Can this machine run it?
 
 From the PR's worktree (`.agents/scripts/worktree.sh <branch>` if there is
-none), run the machine checks from `toolchain.md` for what each line
+none), run the machine checks from that section for what each line
 needs, then the lane script's `check --fix`. One fails: report
 `unavailable` with what is missing, and stop. Install nothing yourself.
 

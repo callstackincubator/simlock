@@ -22,8 +22,8 @@ copies "Tests agents run"; change both together (a repo test compares them).
 `src/contract/`, and only the spec files it changed or whose page it
 changes; CI runs the whole lane. A page's behaviour is a DOM test, which
 `pnpm test:changed` runs; this lane holds what needs a real daemon or
-browser engine. Always with a spec file, in the foreground, with
-`timeout: 600000` on the Bash call (the tool guard refuses otherwise).
+browser engine. Always with a spec file, in the foreground; the tool guard
+sets `timeout: 600000` on a sub-agent's test run.
 
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.
@@ -73,8 +73,8 @@ refactor's `--touched-by` run, below), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
 `oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
 (outside the `garden-comments` routine), `.agents/scripts/test-lint.mjs`. A PreToolUse hook
-(`.agents/scripts/tool-guard.mjs`) refuses them in every sub-agent; keep its
-list and this one the same.
+(`.agents/scripts/tool-guard.mjs`) refuses them in every sub-agent, but runs `tsc --noEmit`
+on a project `pnpm typecheck` compiles as `pnpm typecheck`; keep its list and this one the same.
 
 - **Commit hook:** formats the staged files and stages the result, then
   lint, the comment lint (architecture rule 17), the test lint (testing
@@ -98,10 +98,12 @@ list and this one the same.
   show as annotations on the PR. A `fallow-ignore` comment names its reason
   after ` -- `, and one that no longer hides a finding fails. The `pnpm
   check` steps run as parallel jobs (static checks, unit tests, the unit
-  tests on Windows, the timing tests, the e2e lane in three shards); the
-  Quality check passes only when all of them do. A contributor on Windows
+  tests on Windows in three shards, the timing tests, the e2e lane in three
+  shards); the Quality check passes only when all of them do. The Windows
+  shards run on every push to `main`, and on a pull request whose change
+  can give another result on Windows (list in `ci.yml`). A contributor on Windows
   runs the tests from Git Bash with Python 3 and jq installed, never PowerShell. A
-  failure only the `Unit tests (Windows)` job shows is reproduced by
+  failure only a `Unit tests (Windows) (n/3)` job shows is reproduced by
   rerunning that job on the base commit's CI run (`gh run rerun <run> --job
   <job>`), not locally. The console DOM tests run with the unit tests. The console lane runs
   in Chromium in two shards (the required Console check passes only when
@@ -155,13 +157,13 @@ it ready and runs `deliver` on it, whose gate ends it instead. Every other routi
 only what it changes:
 
 1. `reviewer` with the PR number, round 1, started as the `review` skill
-   starts it. Fix each Fix line yourself,
-   within the routine's kind of edit, then the check its `Rerun` names:
-   `reviewer` with that round, `previous <Commit>` and the complete
-   resolution ledger. `Rerun: none` with findings open: leave the PR in
-   draft and report them.
+   starts it. Fix each Fix line yourself, within the routine's kind of
+   edit, then the check its `Rerun` names: `reviewer` with that round,
+   `previous <Commit>` and the complete resolution ledger. `Rerun: none`
+   with findings open: leave the PR in draft and report them.
 2. Add the `## Review` section as the `deliver` skill's step 4 shapes it,
-   `skipped` for each review the diff's kind left out.
+   `skipped` for each review the diff's kind left out, a fix-check passed
+   to `review-ledger.mjs` as `--round fix-check:review:<Commit>`.
 3. `gh pr ready <M>`, then `.agents/scripts/merge-pr.sh <M>`. Anything but
    a merge: leave the PR open and report.
 
@@ -324,6 +326,11 @@ ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> ro
 <file>]` reads the runs so tagged from Claude Code's transcripts on this
 machine and prints their models, seconds, tokens and cost, and with
 `--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
-what goes in the findings file and where the result is posted. It reports,
-it checks nothing. Runs tagged `stage=replay` (a frozen snapshot reviewed
+what goes in the findings file and where the result is posted. With
+`--findings` it also checks the findings file and writes a class that
+starts with a rule and its number back as that rule plus `detail`; the
+script's header says what it refuses. Runs tagged `stage=replay` (a frozen snapshot reviewed
 again by `review-replay.sh`) are left out unless `--replay` is given.
+`node .agents/scripts/delivery-metrics.mjs [--end <iso>] [--days 14] [--prs <n,n>] [--json]`
+prints cost, time and autonomy per merged PR, the orchestrator included; its header lists every
+option. Run it weekly: it keeps the sleep record the wall times need.

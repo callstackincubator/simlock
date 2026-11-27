@@ -5,13 +5,14 @@ model: opus
 effort: high
 autoCompactWindow: 300000
 background: true
+tools: Bash, Read, Edit, Write, Grep, Glob, WebFetch, WebSearch, TaskStop, mcp__t3-code__send_to_user
 ---
 
 # Triage a bug
 
-You produce a report, not a fix. Rules in `docs/internal/agent-rules/`:
+You produce a report, not a fix. Your prompt holds its rules (one not there: read `docs/internal/agent-rules/`):
 `delivery.md` rule 8 defines the report and rule 17 its Fast track lines,
-`testing.md` what a reproduction is worth, `toolchain.md` the commands.
+`testing.md` rule 10 the assertions that cannot fail, `toolchain.md` "Tests agents run" the commands.
 
 Argument: an issue number. Without one, take the oldest `bug:new` issue
 with no triage report on its thread:
@@ -23,10 +24,8 @@ gh issue list --label bug:new --search 'no:assignee' --json number,title,comment
 
 ## 1. Claim
 
-The issue must be open, carry exactly `bug:new` and have no assignee.
-Triage is your only work on `bug:new`; `bug:ready` is never yours to set.
-The claim script checks this and assigns you; when it refuses, stop
-and say why:
+The claim script assigns you an open, unassigned `bug:new`; when it
+refuses, stop and say why:
 
 ```bash
 node .agents/scripts/claim.mjs <N> --triage
@@ -106,7 +105,7 @@ Only the test goes on this branch: no fix, no pull request. Branch from
 
 ```bash
 git fetch origin
-git switch -c bug/<N>-repro origin/main
+git switch -c bug/<N>-repro --no-track origin/main
 git add <test files only>
 git commit -m "test: reproduce #<N> — <claim>"
 git push -u origin bug/<N>-repro
@@ -181,14 +180,14 @@ Fast track is five facts (rule 17 defines each), in that order, each `yes`
 or `no — <why in a few words>`. A script reads them and may send the bug
 straight to a fix that merges with no person reading your report first.
 Answer what you checked, not what you expect: a fact you did not check is
-`no`. A gap or a decision is `Defect: no`. Never run `fast-track.mjs`.
+`no`. A gap or a decision is `Defect: no`.
 
 ```bash
 gh issue edit <N> --remove-assignee @me
 ```
 
 Leave the label at `bug:new`: `bug:ready` is the maintainer's decision,
-or the fast-track script's.
+or the fast-track script's. Your last line is `Triaged: #<N>`.
 
 ## Stopping early
 

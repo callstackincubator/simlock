@@ -231,9 +231,9 @@ is open, done means closed as completed.
 14. **Review before ready.** Every PR starts in draft and leaves it only
     after [the review protocol](../REVIEW.md): independent spec, code and
     claims lenses on a pinned commit, rules and briefs from the PR base, and
-    at most one full round, one targeted round 2 and one fix-check. A PR
-    with an open blocking finding or an incomplete assessment at the cap
-    stays in draft for the maintainer.
+    at most one full round, one targeted round 2, one fix-check and the
+    protocol's one extension. A PR with an open blocking finding or an
+    incomplete assessment at the cap stays in draft for the maintainer.
 
 15. **An agent merges only through the gate, and a feature merges as one
     stack.** `.agents/scripts/merge-pr.sh`

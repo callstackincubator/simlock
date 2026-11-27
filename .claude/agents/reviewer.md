@@ -6,6 +6,7 @@ effort: medium
 autoCompactWindow: 300000
 background: true
 tools: Bash, Read, Write, Grep, Glob, Agent, SendMessage
+omitClaudeMd: true
 ---
 
 # Review a change before ready

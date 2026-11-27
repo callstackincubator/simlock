@@ -290,6 +290,42 @@ describe("pr-body-check.mjs", { timeout: 60_000 }, () => {
     ]);
   });
 
+  it("reads a fix-check's trigger, and warns over three checks and over one extension", () => {
+    const { dir, older } = scratchRepo();
+    const task = (rounds: string) =>
+      fromGitHub(
+        { body: valid, head: { ref: "task/7", sha: older } },
+        {
+          comments: [`## Review ledger\n\n${rounds}\n\`\`\`json\n{"findings": []}\n\`\`\``],
+          routes: LONE_ISSUE,
+          cwd: dir,
+        },
+      );
+    const capped = `Round 1: ${older}\nRound 2: ${older}\nRound fix-check: ${older} review`;
+
+    expect(task(capped)).toEqual({ status: 0, lines: [] });
+    expect(task(`Round 1: ${older}\nRound fix-check: ${older} review\nextension: 1`).lines).toEqual(
+      [],
+    );
+    expect(task(`${capped}\nRound fix-check: ${older} review\nextension: 1`)).toEqual({
+      status: 0,
+      lines: ["pr-body: warning: the ledger has 4 checks: 1 1, 2 1, review 2"],
+    });
+    expect(
+      task(`${capped}\nRound fix-check: ${older} ci\nRound fix-check: ${older}`).lines,
+    ).toEqual(["pr-body: warning: the ledger has 5 checks: 1 1, 2 1, review 1, ci 1, fix-check 1"]);
+    expect(task(`Round 1: ${older}\nextension: 2`)).toEqual({
+      status: 0,
+      lines: [expect.stringContaining("the ledger has 2 review fix-checks past the cap")],
+    });
+    expect(task(`Round fix-check: ${older} lint`).lines).toEqual([
+      expect.stringContaining("a fix-check's with its trigger"),
+    ]);
+    expect(task(`Round 1: ${older} ci`).lines).toEqual([
+      expect.stringContaining('is not "Round <1|2|fix-check>: <full sha>"'),
+    ]);
+  });
+
   it("fails an Assumptions line that is not none or one Assumption line", () => {
     const body = (line: string) => valid.replace("\nnone\n", `\n${line}\n`);
 

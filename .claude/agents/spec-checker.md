@@ -5,6 +5,7 @@ model: opus
 effort: high
 autoCompactWindow: 300000
 background: true
+tools: Bash, Read, Grep, Glob
 ---
 
 # Check a spec before it is built
