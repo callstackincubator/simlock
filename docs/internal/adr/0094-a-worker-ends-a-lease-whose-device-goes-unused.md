@@ -40,10 +40,11 @@ flowchart LR
    stopped renewing. Either clock alone ends it. This narrows ADR 0004 §1:
    a renew keeps a lease alive only while its device is used.
 2. **Use is a call that acts on the device.** Commands, input,
-   agent-device commands and the bytes of an `emulator` tunnel (a remote
-   adb session) count; a command counts for as long as it runs. A local
-   `simlock simctl` or `simlock adb` counts for every lease its requester
-   holds, since it names no lease. Renewals, status and list reads,
+   agent-device commands and the bytes of a tunnel connection to an
+   emulator's adb port (a remote adb session) count; a command counts for
+   as long as it runs. A local `simlock simctl` or `simlock adb` names no
+   lease, so it holds every lease its requester holds in use until it
+   exits: the CLI keeps its daemon connection open while the command runs. Renewals, status and list reads,
    watching the screen stream, port tunnels and lease files do not. Nothing counts as use without acting on
    the device: there is no call that only resets the idle clock, so a
    renew loop cannot become one.
