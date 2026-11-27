@@ -449,18 +449,26 @@ function gitRules(words, dynamic, dir) {
 }
 
 function landsOnMain(g) {
+  const [remote, ...refspecs] = pushOperands(g);
+  if (remote !== undefined && !remote.dynamic && remote.text !== "origin") return false;
+  if (g.rest.some((w) => /^--(?:all|branches|mirror)$/.test(w))) return true;
+  const current = currentBranch(g.dir);
+  if (refspecs.length === 0) return plainPushToMain(g, current);
+  return refspecs.some((spec) => pushTarget(spec, current, g.dir) === "main");
+}
+
+function pushOperands(g) {
   const operands = [];
   for (let i = 0; i < g.rest.length; i++) {
     if (PUSH_VALUE_FLAGS.has(g.rest[i])) i++;
     else if (!g.rest[i].startsWith("-"))
       operands.push({ text: g.rest[i].replace(/^\+/, ""), dynamic: g.dynamic[i] });
   }
-  const [remote, ...refspecs] = operands;
-  if (remote !== undefined && !remote.dynamic && remote.text !== "origin") return false;
-  if (g.rest.some((w) => /^--(?:all|branches|mirror)$/.test(w))) return true;
-  const current = currentBranch(g.dir);
-  if (refspecs.length > 0) return refspecs.some((s) => pushTarget(s, current, g.dir) === "main");
-  // why: `--tags` with no refspec pushes tags only; a plain push goes to the branch's own remote.
+  return operands;
+}
+
+// why: `--tags` with no refspec pushes tags only; a plain push goes to the branch's own remote.
+function plainPushToMain(g, current) {
   if (g.rest.includes("--tags")) return false;
   if (current === "main") return true;
   return gitConfig(g.dir, `branch.${current}.remote`) === "origin" && tracksMain(g.dir, current);
@@ -876,19 +884,7 @@ function waitingRules(raw, shell) {
 // directory that has the script; the pattern finds their text. The command is rewritten only
 // when both agree on the count, so text inside a string or after `echo` is never touched.
 function asTypecheck(raw) {
-  const state = { dir: cwd };
-  let followed = true;
-  let runs = 0;
-  for (const cmd of parseShell(raw)) {
-    const { words, dynamic } = commandWords(cmd);
-    if (words.length === 0) continue;
-    if (path.basename(words[0]) === "cd") {
-      followed = changesDirectory(state, words, dynamic) && followed;
-    } else if (followed && !dynamic.some(Boolean) && isTypecheck(words)) {
-      if (!hasTypecheck(state.dir)) return null;
-      runs++;
-    }
-  }
+  const runs = typecheckRuns(raw);
   const spans = [...blanked(raw).matchAll(TSC_RUN)].filter((m) => isTypecheck(m[0].split(/\s+/)));
   if (runs === 0 || spans.length !== runs) return null;
   let out = raw;
@@ -897,18 +893,43 @@ function asTypecheck(raw) {
   return out;
 }
 
-function isTypecheck(words) {
-  let at = 0;
-  if (words[0] === "pnpm" || words[0] === "npx")
-    for (at = 1; words[at] === "exec" || words[at]?.startsWith("-");) at++;
-  if (path.basename(words[at] ?? "") !== "tsc") return false;
-  const rest = words.slice(at + 1);
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i] === "-p" || rest[i] === "--project") {
-      if (!TYPECHECK_PROJECTS.has(path.posix.join(rest[++i] ?? "-", "."))) return false;
-    } else if (rest[i] !== "--noEmit") return false;
+// why: none counts once one of them runs where no `typecheck` script is, or after a `cd` the
+// guard cannot follow.
+function typecheckRuns(raw) {
+  const state = { dir: cwd };
+  let followed = true;
+  let runs = 0;
+  for (const cmd of parseShell(raw)) {
+    const { words, dynamic } = commandWords(cmd);
+    if (path.basename(words[0] ?? "") === "cd") {
+      followed = changesDirectory(state, words, dynamic) && followed;
+    } else if (followed && !dynamic.some(Boolean) && isTypecheck(words)) {
+      if (!hasTypecheck(state.dir)) return 0;
+      runs++;
+    }
   }
-  return rest.includes("--noEmit");
+  return runs;
+}
+
+function isTypecheck(words) {
+  const at = words.findIndex((w) => path.basename(w) === "tsc");
+  if (at === -1 || !launchesIt(words.slice(0, at))) return false;
+  const rest = words.slice(at + 1);
+  return rest.includes("--noEmit") && rest.every((w, i) => w === "--noEmit" || isProject(rest, i));
+}
+
+// why: the program itself, or `pnpm tsc`, `pnpm exec tsc`, `npx -y tsc`.
+function launchesIt(before) {
+  if (before.length === 0) return true;
+  const launcher = before[0] === "pnpm" || before[0] === "npx";
+  return launcher && before.slice(1).every((w) => w === "exec" || w.startsWith("-"));
+}
+
+// why: `-p` or its value, for a project `pnpm typecheck` compiles.
+function isProject(rest, i) {
+  const flag = (w) => w === "-p" || w === "--project";
+  const known = (w) => TYPECHECK_PROJECTS.has(path.posix.join(w ?? "-", "."));
+  return flag(rest[i]) ? known(rest[i + 1]) : i > 0 && flag(rest[i - 1]) && known(rest[i]);
 }
 
 function hasTypecheck(dir) {
