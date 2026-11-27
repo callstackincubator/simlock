@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -137,5 +137,65 @@ describe("review-metrics.mjs", () => {
     );
     expect(refused.code).not.toBe(0);
     expect(refused.err).toContain("duplicate R1 must name a canonical finding");
+  });
+
+  it("with --findings writes a class that starts with a rule and its number back as that rule plus a detail, and leaves other classes alone", () => {
+    const config = home({});
+    const file = join(mkdtempSync(join(tmpdir(), "findings-")), "findings.json");
+    const finding = (id: string, name: string) => ({
+      id,
+      role: "code",
+      class: name,
+      path: "src/a.ts:1",
+      outcome: "fixed",
+    });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        findings: [
+          finding("R1", "testing 3: error path"),
+          finding("R2", "Testing 10 time boundary not straddled"),
+          finding("R3", "safety 1, safety 9"),
+          finding("R4", "documentation contradicts code"),
+          finding("R5", "spec line undelivered"),
+        ],
+      }),
+    );
+
+    const run = metrics(config, "--pr", "7", "--findings", file);
+
+    expect(run.out).toContain(
+      'Classes: {"documentation contradicts code":1,"safety 1":1,"spec line undelivered":1,"testing 10":1,"testing 3":1}.',
+    );
+    const written = JSON.parse(readFileSync(file, "utf8")) as {
+      findings: { class: string; detail?: string; id: string }[];
+    };
+    expect(written.findings.map((f) => [f.id, f.class, f.detail])).toEqual([
+      ["R1", "testing 3", "error path"],
+      ["R2", "testing 10", "time boundary not straddled"],
+      ["R3", "safety 1", "safety 9"],
+      ["R4", "documentation contradicts code", undefined],
+      ["R5", "spec line undelivered", undefined],
+    ]);
+  });
+
+  it("with --findings refuses a class that names a rule file and no rule number, says the accepted forms, and leaves the file as it was", () => {
+    const config = home({});
+    const file = join(mkdtempSync(join(tmpdir(), "findings-")), "findings.json");
+    const text = JSON.stringify({
+      findings: [
+        { id: "R1", role: "code", class: "testing 3: error path", path: "a.ts:1", outcome: "open" },
+        { id: "R2", role: "code", class: "testing: wiring", path: "a.ts:1", outcome: "open" },
+      ],
+    });
+    writeFileSync(file, text);
+
+    const run = metrics(config, "--pr", "7", "--findings", file);
+
+    expect(run.code).not.toBe(0);
+    expect(run.err).toContain(
+      'finding R2 has class "testing: wiring", which names the rule file testing and no rule number. Accepted: "testing <n>", "testing <n>: <detail>"',
+    );
+    expect(readFileSync(file, "utf8")).toBe(text);
   });
 });
