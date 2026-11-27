@@ -15,6 +15,7 @@ A conflict between the specification and a rule is a finding of class
 not touch still blocks when the PR causes it; show the causal link.
 Unrelated pre-existing debt is separate. A specified behavior is not immune
 to binding rules: apply `review-protocol.md` precedence.
+Accepted future-state ADRs remain targets: never fix docs back to today's code.
 
 Prove a claim with the affected test file only, using the one-file commands
 under "Tests agents run" in `rules/toolchain.md`. Run nothing listed there

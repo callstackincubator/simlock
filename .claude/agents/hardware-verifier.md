@@ -6,6 +6,7 @@ effort: low
 autoCompactWindow: 300000
 background: true
 tools: Bash, Read, Grep
+omitClaudeMd: true
 ---
 
 # Verify in the slow lane
