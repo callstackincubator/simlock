@@ -85,10 +85,9 @@ another handover and every admin operation. Exec runs commands on the
 worker as the daemon's user, so a credential that allowed it would not
 keep an agent to one device.
 
-Because the principal is the owner's, the agent and the coordinator share
-the lease's agent-device tenant (principal and lease id). The coordinator
-can see what the agent does on its own lease, and nothing of the
-coordinator's other leases reaches the agent.
+Because the principal is the owner's, every ownership check and the
+lease's agent-device tenant (principal and lease id) work unchanged, and
+nothing of the coordinator's other leases reaches the agent.
 
 ### 3. It dies with the lease and with its owner's token
 
@@ -150,9 +149,8 @@ relays the owner's. A worker never sees one.
   stored or shown more than once, and a lease made by the agent-device
   front could not get one.
 - **A new principal per credential, with the lease naming it as a
-  delegate.** Rejected: every ownership check would learn a second owner,
-  and the agent would get its own agent-device tenant, so the coordinator
-  could not see the agent's sessions.
+  delegate.** Rejected: every ownership check, list filter and
+  agent-device tenant would have to learn a second owner.
 - **A short-lived agent token per job.** It still reaches every lease made
   with it and exec, and needs an operator. ADR 0093 adds an expiry for
   the cases a lease cannot scope.
