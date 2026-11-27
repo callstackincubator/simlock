@@ -18,7 +18,8 @@
 // --transcripts names the project folders to read, `*` allowed in the last part; the default is
 // every folder under Claude Code's projects directory whose name holds the main checkout's.
 // Transcripts changed in the 16 days before the window are read too, for work that started
-// before it; GitHub is read up to --days after --end, for the bugs filed after the window. --repo is the repository on GitHub (default: GH_REPO, else the origin remote's).
+// before it. Merged PRs are read up to --days after --end, issues up to today. --repo is the
+// repository on GitHub (default: GH_REPO, else the origin remote's).
 // --sleep is where the sleep record is kept (default: delivery-metrics/sleep.json in the
 // clone's git directory); run the script weekly or the record has gaps
 // (delivery-metrics-sleep.mjs). --input reads `{ prs, issues, comments, pendingDecisions }`
@@ -87,9 +88,12 @@ console.log(options.json ? JSON.stringify(report, null, 2) : reportText(report))
 
 function fetched() {
   const repo = options.repo ?? repository();
-  const now = Math.min(Date.now(), window.to + days * DAY);
-  const prs = mergedPrs(repo, window.from - EARLIER_PRS_DAYS * DAY, now);
-  if (numbers === null) return { prs, ...autonomyData(repo, window.from, now) };
+  const today = Date.now();
+  // why: a merge date never changes, so no PR merged later than --days after --end is needed; an
+  // issue's `updated` date moves with every later touch, so issues are listed up to today.
+  const lastMerge = Math.min(today, window.to + days * DAY);
+  const prs = mergedPrs(repo, window.from - EARLIER_PRS_DAYS * DAY, lastMerge);
+  if (numbers === null) return { prs, ...autonomyData(repo, window.from, today) };
   return { prs: prs.map((pr) => (numbers.includes(pr.number) ? withFiles(repo, pr) : pr)) };
 }
 

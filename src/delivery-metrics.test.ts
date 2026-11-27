@@ -203,13 +203,22 @@ type Pr = {
 };
 type GitHub = {
   prs: Pr[];
-  issues?: { number: number; labels: string[]; createdAt: string; body: string }[];
+  issues?: {
+    number: number;
+    labels: string[];
+    createdAt: string;
+    updatedAt?: string;
+    body: string;
+  }[];
   comments?: { issue: number; createdAt: string; body: string }[];
   pendingDecisions?: number;
 };
 
 const handoff = (blockedOn: string, done = "the PR is ready."): string =>
   `## Handoff\n\nDone: ${done}\n\nBlocked on: ${blockedOn}\n\n_Written by an agent._`;
+
+// why: an issue filed in the window is often labelled, commented on or closed weeks after it.
+const TOUCHED_LATER = "2026-11-20T00:00:00Z";
 
 const GITHUB: GitHub = {
   prs: [
@@ -273,10 +282,17 @@ const GITHUB: GitHub = {
       number: 20,
       labels: ["bug:ready", "fast-track"],
       createdAt: at("08:00:00"),
+      updatedAt: TOUCHED_LATER,
       body: "Seen while testing #3.",
     },
     { number: 22, labels: ["bug:new"], createdAt: at("13:00:00"), body: "It fails." },
-    { number: 24, labels: ["bug:new"], createdAt: "2026-10-11T10:00:00Z", body: "After #3." },
+    {
+      number: 24,
+      labels: ["bug:new"],
+      createdAt: "2026-10-11T10:00:00Z",
+      updatedAt: TOUCHED_LATER,
+      body: "After #3.",
+    },
   ],
   comments: [
     { issue: 22, createdAt: at("13:30:00"), body: TRIAGE_REPORT },
@@ -360,7 +376,7 @@ function fakeGh(dir: string, github: GitHub): void {
     issues: (github.issues ?? []).map((issue) => ({
       ...issue,
       labels: issue.labels.map((name) => ({ name })),
-      updatedAt: issue.createdAt,
+      updatedAt: issue.updatedAt ?? issue.createdAt,
     })),
     comments: (github.comments ?? []).map((c) => ({
       issue_url: `https://api.github.com/repos/o/r/issues/${c.issue}`,
@@ -453,6 +469,49 @@ function tableLine(out: string, first: string): string {
 }
 
 const WINDOW = ["--end", "2026-10-11T00:00:00Z", "--days", "2"];
+const DAY = 24 * 60 * 60 * 1000;
+
+function buildsOf(usd: readonly number[]): string {
+  const files = Object.assign(
+    {},
+    ...usd.map((dollars, i) =>
+      runFiles(`p${i}`, {
+        type: "implementer",
+        id: `p${i}`,
+        lines: [
+          prompt(
+            "10:00:00",
+            `ledger: pr=${40 + i} issue=- stage=build round=- role=implementer lens=-`,
+          ),
+          reply("10:01:00", `p${i}`, SONNET, { output_tokens: dollars * 100_000 }),
+        ],
+      }),
+    ),
+  ) as Record<string, string>;
+  const prs = usd.map((_, i) => ({
+    number: 40 + i,
+    title: "chore: one of them",
+    headRefName: `chore/build-${i}`,
+    baseRefName: "main",
+    mergedAt: at("12:00:00"),
+    additions: 10,
+    deletions: 0,
+    changedFiles: 1,
+    closes: [],
+    mergeCommit: `${i}`.repeat(10),
+    body: "",
+  }));
+  return metrics(WINDOW, { files, github: { prs } }).out;
+}
+
+function issueListsUpTo(now: number): string[] {
+  const day = (t: number): string => new Date(t).toISOString().slice(0, 10);
+  const calls: string[] = [];
+  for (let t = Date.parse("2026-10-09"); t < now + DAY; t += 7 * DAY) {
+    calls.push(`issue list updated:${day(t)}..${day(t + 6 * DAY)}`);
+  }
+  return calls;
+}
 
 describe("delivery-metrics.mjs", () => {
   it("adds up a PR's delivery from the runs its ledger tags name and the orchestrator's turns and tokens while that PR was its latest spawn or report, a later `deliver` by command or by Skill ending that: awake wall from the claim to the merge, minutes and USD by stage, each message once at its last usage, and what the fix and slow-lane runs report", () => {
@@ -543,39 +602,24 @@ describe("delivery-metrics.mjs", () => {
     ]);
   });
 
-  it("prints a metric's 95% interval once five PRs are in the window: with five PRs at $1 and one at $7, resampled means and medians run from 1 to 4; a stage none of them had gets no row", () => {
-    const usd = [1, 1, 1, 1, 1, 7];
-    const files = Object.assign(
-      {},
-      ...usd.map((dollars, i) =>
-        runFiles(`p${i}`, {
-          type: "implementer",
-          id: `p${i}`,
-          lines: [
-            prompt(
-              "10:00:00",
-              `ledger: pr=${40 + i} issue=- stage=build round=- role=implementer lens=-`,
-            ),
-            reply("10:01:00", `p${i}`, SONNET, { output_tokens: dollars * 100_000 }),
-          ],
-        }),
-      ),
-    ) as Record<string, string>;
-    const prs = usd.map((_, i) => ({
-      number: 40 + i,
-      title: "chore: one of six",
-      headRefName: `chore/six-${i}`,
-      baseRefName: "main",
-      mergedAt: at("12:00:00"),
-      additions: 10,
-      deletions: 0,
-      changedFiles: 1,
-      closes: [],
-      mergeCommit: `${i}`.repeat(10),
-      body: "",
-    }));
+  it("prints no interval for a window of four PRs", () => {
+    const out = buildsOf([1, 1, 1, 5]);
 
-    const { out } = metrics(WINDOW, { files, github: { prs } });
+    expect(tableLine(out, "1")).toBe(
+      "| 1 | USD per delivered PR, mean (median; S / M / L medians) | 2.00 (1.00; 1.00 / - / -) | - |",
+    );
+  });
+
+  it("prints a metric's 95% interval from five PRs: with four at $1 and one at $6, resampled means run from 1 to 4 and medians from 1 to 6", () => {
+    const out = buildsOf([1, 1, 1, 1, 6]);
+
+    expect(tableLine(out, "1")).toBe(
+      "| 1 | USD per delivered PR, mean (median; S / M / L medians) | 2.00 (1.00; 1.00 / - / -) | mean 1.00..4.00; S 1.00..6.00 |",
+    );
+  });
+
+  it("with six PRs, five at $1 and one at $7, prints means and medians resampled from 1 to 4, and no row for a stage none of them had", () => {
+    const out = buildsOf([1, 1, 1, 1, 1, 7]);
 
     expect(tableLine(out, "1")).toBe(
       "| 1 | USD per delivered PR, mean (median; S / M / L medians) | 2.00 (1.00; 1.00 / - / -) | mean 1.00..4.00; S 1.00..4.00 |",
@@ -605,19 +649,24 @@ describe("delivery-metrics.mjs", () => {
     ]);
   });
 
-  it("without --input lists from GitHub the PRs merged from 28 days before the window to --days after it, a week a query, the issues updated and the comments written since the window's start and the pending marks, and prints what the same data gives through --input", () => {
+  it("without --input lists from GitHub the PRs merged from 28 days before the window to --days after it and the issues updated from the window's start to today, a week a query, the comments written since the window's start and the pending marks, and prints what the same data gives through --input, issues touched weeks after the window included", () => {
+    const before = Date.now();
     const viaGh = metrics(WINDOW, { throughGh: true });
+    const after = Date.now();
 
-    expect(viaGh.ghCalls()).toEqual([
+    const calls = viaGh.ghCalls();
+    const issueLists = calls.filter((call) => call.startsWith("issue list"));
+    expect([issueListsUpTo(before), issueListsUpTo(after)]).toContainEqual(issueLists);
+    expect(calls.filter((call) => !call.startsWith("issue list"))).toEqual([
       "pr list merged:2026-09-11..2026-09-17",
       "pr list merged:2026-09-18..2026-09-24",
       "pr list merged:2026-09-25..2026-10-01",
       "pr list merged:2026-10-02..2026-10-08",
       "pr list merged:2026-10-09..2026-10-15",
-      "issue list updated:2026-10-09..2026-10-15",
       "api repos/o/r/issues/comments since=2026-10-09T00:00:00.000Z",
       'api search/issues q=repo:o/r "decided in delivery, pending the maintainer"',
     ]);
+    expect(calls.indexOf(issueLists[0] ?? "")).toBe(5);
     expect(viaGh.out).toBe(metrics(WINDOW).out);
   });
 
