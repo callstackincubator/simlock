@@ -24,7 +24,7 @@ Resolve and boot:
 - `launchdOverridesRoot` is outside the device set: `destroy` and each seed deletion remove their folder after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step.
 - Volume (`ios.simulator.audio: false`): apps play at volume 0. A baseline source is not silenced.
-- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and leaves started devices running when it quits. Only a non-zero exit of that open means it is missing: Simulator.app is then opened, detached.
+- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and leaves started devices running when it quits. Only a non-zero exit of that open means it is missing: Simulator.app is then opened, detached. It overrides clipboard isolation.
 
 Seeds (ADR 0061):
 

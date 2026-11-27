@@ -39,7 +39,7 @@ import {
   type ScreenCapture,
 } from "../../core/index.js";
 import type { Clock, Logger, ProcessRunner, ProcessTable } from "../../ports/index.js";
-import { runAfterBoot, type AfterBoot } from "./boot-courtesies.js";
+import { runAfterBoot, simulatorAppRunning, type AfterBoot } from "./boot-courtesies.js";
 import { runCommand } from "./command-run.js";
 import { SeedTurns } from "./seed-turns.js";
 import { COMMAND_TIMEOUT_MS, Simctl } from "./simctl.js";
@@ -578,6 +578,24 @@ export class IosSimctlDriver implements Driver {
     return [
       ...(await this.#components.cacheAdvisories()),
       ...(await this.#catalog.slimAdvisories()),
+      ...(await this.#simulatorAppAdvisories()),
+    ];
+  }
+
+  async #simulatorAppAdvisories(): Promise<readonly DriverAdvisory[]> {
+    // why: only the default set can show Simulator.app the simulators this driver leases.
+    if (this.#rootOptions !== undefined) return [];
+    const running = await simulatorAppRunning({
+      pgrep: (args, timeoutMs) =>
+        runCommand(this.#processRunner, this.#clock, "/usr/bin/pgrep", args, timeoutMs),
+    });
+    if (!running) return [];
+    return [
+      {
+        code: "simulator-app-clipboard-sync",
+        message:
+          "Simulator.app is running and syncs the Mac clipboard into every simulator it shows, whatever DeviceHub's setting says; quit it or turn off Simulator > Edit > Automatically Sync Pasteboard.",
+      },
     ];
   }
 
