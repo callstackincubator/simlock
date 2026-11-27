@@ -17,10 +17,12 @@ work and waits for a person, or forgot to release, keeps a booted
 simulator for hours. On a shared worker that device is capacity another
 agent is queued for.
 
-The worker already sees every call that acts on a leased device: a
-command (`device.exec`, the passthrough's resolution, `device.rotate`),
-input on the lease's input socket, and every agent-device command, local
-or relayed from a gateway, passes through the worker that owns the lease.
+The worker already sees most calls that act on a leased device: a
+command (`device.exec`, `device.rotate`), input on the lease's input
+socket, the bytes of an `emulator` tunnel, and every agent-device
+command, local or relayed from a gateway, pass through the worker that
+owns the lease. A local `simlock simctl` or `simlock adb` asks the worker
+to resolve the command, but names no lease.
 
 ```mermaid
 flowchart LR
@@ -37,10 +39,12 @@ flowchart LR
    limit, whatever its renews. The TTL still ends a lease whose holder
    stopped renewing. Either clock alone ends it. This narrows ADR 0004 §1:
    a renew keeps a lease alive only while its device is used.
-2. **Use is a call that acts on the device.** Commands, input and
-   agent-device commands count; a command counts for as long as it runs.
-   Renewals, status and list reads, watching the screen stream, tunnel
-   traffic and lease files do not. Nothing counts as use without acting on
+2. **Use is a call that acts on the device.** Commands, input,
+   agent-device commands and the bytes of an `emulator` tunnel (a remote
+   adb session) count; a command counts for as long as it runs. A local
+   `simlock simctl` or `simlock adb` counts for every lease its requester
+   holds, since it names no lease. Renewals, status and list reads,
+   watching the screen stream, port tunnels and lease files do not. Nothing counts as use without acting on
    the device: there is no call that only resets the idle clock, so a
    renew loop cannot become one.
 3. **The operator sets the limit on the worker, and it is on by default.**
@@ -70,8 +74,8 @@ stateDiagram-v2
 
 - A forgotten lease frees its device at most one idle limit after its
   last use, even while its holder renews.
-- A tool that drives the device without simlock (`xcrun simctl`, `adb`,
-  Detox, Maestro run directly) is not seen. Its lease ends at the limit
+- A tool that drives the device without simlock (`xcodebuild test`,
+  Detox, Maestro run directly on the UDID) is not seen. Its lease ends at the limit
   while it works. The operator raises the limit or sets `0` for such a
   worker. Because the limit is on by default, the website's leases page
   says so.
@@ -99,5 +103,7 @@ stateDiagram-v2
 - **Warn the holder before the end.** The usual idle holder is an agent
   between turns, which cannot act on a warning. The idle deadline on the
   lease record serves a script or a person who watches.
-- **Count tunnel traffic or open streams.** Metro's long-lived socket and
-  a console tab left open would keep a lease alive forever. Rejected.
+- **Count port tunnels or open streams.** Metro's long-lived socket and
+  a console tab left open would keep a lease alive forever. Rejected. An
+  `emulator` tunnel is different: it carries adb, which sends nothing
+  while idle.
