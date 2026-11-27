@@ -41,6 +41,8 @@ function stack(status: string) {
   git(root, "clone", "-q", origin, clone);
   git(clone, "config", "user.name", "t");
   git(clone, "config", "user.email", "t@t");
+  // why: Git for Windows checks files out with CRLF, and the script reads them from a worktree.
+  git(clone, "config", "core.autocrlf", "true");
   const before = git(origin, "rev-parse", "task/7");
   const flip = (...args: string[]) => {
     const run = spawnSync(process.execPath, [join(SCRIPTS, "adr-flip.mjs"), ...args], {

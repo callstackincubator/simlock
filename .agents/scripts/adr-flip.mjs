@@ -87,7 +87,7 @@ function status(name) {
     return "pending";
   }
   if (/^- \*\*Status:\*\* Accepted\b/.test(item[0] ?? "")) return null;
-  return `${ADRS}/${name}: its Status is not "Accepted — not yet implemented": "${(item[0] ?? "no Status item").slice(0, 60)}"`;
+  return `${ADRS}/${name}: its Status is not "Accepted — not yet implemented": "${(item[0] ?? "no Status item").trim().slice(0, 60)}"`;
 }
 
 function publish(flipped) {
