@@ -16,6 +16,7 @@ import {
   waitFor,
   withHttpDaemon,
   withSharedDaemon,
+  withinBudget,
 } from "./helpers/index.js";
 import type { InputSocket } from "./helpers/input-socket.js";
 import type { ScreenFrame } from "./helpers/screen-frames.js";
@@ -539,9 +540,7 @@ describe.skipIf(notRunnable !== undefined)(
             timeout: 30_000,
           });
           const switched = switches.find((entry) => entry.count === count)!.at - foldedAt;
-          expect(switched, `the switch after folding ${pose} took too long`).toBeLessThan(
-            SWITCH_BOUND_MS,
-          );
+          withinBudget(`the stream's switch after folding ${pose}`, switched, SWITCH_BOUND_MS);
         }
         // why: the log names the panel before SpringBoard has painted it, so the first pictures
         // after a switch can be black on a loaded host; the claim is that the panel is lit once it

@@ -2,7 +2,13 @@ import { execFile } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import { ANDROID_SDK } from "./helpers/test-android-sdk.js";
-import { DEVICE_READY_MS, deviceStreamUrl, waitFor, withHttpDaemon } from "./helpers/index.js";
+import {
+  DEVICE_READY_MS,
+  deviceStreamUrl,
+  waitFor,
+  withHttpDaemon,
+  withinBudget,
+} from "./helpers/index.js";
 
 const TAG = { alive: 0x06, description: 0x01, keyframe: 0x02, delta: 0x03, meta: 0x05 } as const;
 
@@ -194,7 +200,9 @@ describe.skipIf(ANDROID_SDK === undefined)(
             "fewer than 4 key frames after the first 15 s of a still screen",
           ).toBeGreaterThanOrEqual(4);
           const gaps = settled.slice(1).map((at, index) => at - settled[index]!);
-          expect(Math.max(...gaps), `key frame gaps in ms: ${gaps.join(", ")}`).toBeLessThanOrEqual(
+          withinBudget(
+            `a still emulator's longest key frame gap (gaps in ms: ${gaps.join(", ")})`,
+            Math.max(...gaps),
             5_500,
           );
 

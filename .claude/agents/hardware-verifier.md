@@ -22,15 +22,15 @@ use, come from the lane script (`toolchain.md`), never from your prompt.
 
 ## 1. Can this machine run it?
 
-Run the machine checks from `toolchain.md` for what each line needs, then
-the lane script's `check`. One fails: report `unavailable` with what is
-missing, and stop. Install nothing.
+From the PR's worktree (`.agents/scripts/worktree.sh <branch>` if there is
+none), run the machine checks from `toolchain.md` for what each line
+needs, then the lane script's `check --fix`. One fails: report
+`unavailable` with what is missing, and stop. Install nothing yourself.
 
 ## 2. Run the lane
 
-From the PR's worktree (`.agents/scripts/worktree.sh <branch>` if there is
-none), note the machine's load (`uptime`, and `getconf _NPROCESSORS_ONLN`
-for the cores), then start the lane script with the test files. On
+Note the machine's load (`uptime`, and `getconf _NPROCESSORS_ONLN` for
+the cores), then start the lane script with the test files. On
 attempt 1 add `--bail=1`, so the first failure ends the run. On a later
 attempt leave it out: a run that stops at its first failure shows the
 next one only after another fix. It returns at once and prints the log

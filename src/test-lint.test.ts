@@ -58,6 +58,8 @@ const file = (...lines: string[]) => `${lines.join("\n")}\n`;
 
 const TIME =
   "a bound on real time goes in a *.timing.test.ts file or the slow lane; here drive a fake clock and assert the exact value (testing 5)";
+const BUDGET =
+  "bound real time in the slow lane with withinBudget(name, measuredMs, budgetMs) from e2e/helpers, which grows the bound with host load and logs the value (testing 5)";
 const SKIP =
   "never skip, focus or defer a test to get to green; fix it or delete it, and gate a live-device test on a SIMLOCK_ variable (testing 5)";
 const VACUOUS =
@@ -92,13 +94,50 @@ describe("test-lint.mjs", () => {
           "const started = Date.now();",
           "expect(Date.now() - started).toBeLessThan(2_000);",
         ),
-        "e2e/slow-ios.test.ts": file("expect(Date.now() - started).toBeLessThan(60_000);"),
         "src/a/clock.test.ts": file(
           "const at = Date.now();",
           "clock.advance(2_000);",
           "expect(clock.now()).toBe(3_000);",
           "expect(connection.serverNow() - Date.now()).toBe(90_000);",
         ),
+      },
+    },
+    {
+      rule: "testing 5, a real-time bound from above in a slow-lane file",
+      before: {},
+      failing: {
+        "e2e/slow-ios.test.ts": file(
+          "it('streams', async () => {",
+          "  expect(Date.now() - started).toBeLessThan(limit);",
+          "  expect(",
+          "    Math.max(...gaps),",
+          "    'went over 5.5 s without a key frame',",
+          "  ).toBeLessThanOrEqual(5_500);",
+          "  expect(switched, 'the switch took too long').toBeLessThan(SWITCH_BOUND_MS);",
+          "  const elapsed = Date.now() - asked;",
+          "  expect(",
+          "    elapsed,",
+          "    'the refusal took too long',",
+          "  ).toBeLessThan(limit);",
+          "  expect(expired.timestamp).toBeLessThanOrEqual(",
+          "    Math.max(lastRenewal + 20_000, answeredAt) + 5_000,",
+          "  );",
+          "});",
+        ),
+      },
+      expected: [2, 6, 7, 12, 13].map((n) => `e2e/slow-ios.test.ts:${n}: ${BUDGET}`),
+      passing: {
+        "e2e/slow-android.test.ts": file(
+          "it('streams', async () => {",
+          "  withinBudget('key frame gap', Math.max(...gaps), 5_500);",
+          "  withinBudget('refusal', Date.now() - asked, 10_000);",
+          "  expect(Math.max(meta.width, meta.height)).toBeLessThanOrEqual(720);",
+          "  expect(exitedAt - startedAt).toBeGreaterThanOrEqual(20_000);",
+          "  expect(held.length, 'sent nothing for 35_000 ms').toBeLessThan(count);",
+          "  expect(seconds / 60).toBeLessThan(0.3);",
+          "});",
+        ),
+        "e2e/lease.test.ts": file("expect(sizeBytes).toBeLessThan(5_000);"),
       },
     },
     {

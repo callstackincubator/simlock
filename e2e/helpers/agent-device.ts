@@ -48,7 +48,11 @@ const made: MadeAgent[] = [];
 
 function agentDeviceEntry(): string {
   const entry = process.env.SIMLOCK_E2E_AGENT_DEVICE;
-  if (entry === undefined || entry === "") throw new Error("SIMLOCK_E2E_AGENT_DEVICE is not set");
+  if (entry === undefined || entry === "") {
+    throw new Error(
+      "SIMLOCK_E2E_AGENT_DEVICE is not set: run the test through scripts/slow-e2e.sh, which installs agent-device and sets it",
+    );
+  }
   return entry;
 }
 

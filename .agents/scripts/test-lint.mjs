@@ -6,7 +6,12 @@
 //
 //   testing 5   bounds real time: `expect(...).toBeLessThan/GreaterThan` on `Date.now()`,
 //               `performance.now()` or `process.hrtime`, or on an x assigned from one of them in
-//               the same test; `*.timing.test.ts` and `e2e/slow-*` files are exempt
+//               the same test; `*.timing.test.ts` files are exempt
+//   testing 5   in an `e2e/slow-*` file, bounds real time from above outside the helper:
+//               `expect(...).toBeLessThan/toBeLessThanOrEqual` on a clock as above (the `expect`
+//               may start on an earlier line), or against a bound read as milliseconds (a number
+//               of 1000 or more, or a name ending in `_MS` or `Ms`); `withinBudget(...)` from
+//               `e2e/helpers` is the allowed form
 //   testing 5   skips, focuses or defers a test: `it|test|describe.only|skip|todo`, or a
 //               `skipIf(`/`runIf(`; exempt when the line reads a `SIMLOCK_` variable, a
 //               `skipIf`/`runIf` on `process.platform`, and one in an `e2e/slow-*` file (the
@@ -34,6 +39,8 @@ import { changedFiles } from "./comments.mjs";
 
 const MESSAGES = {
   time: "a bound on real time goes in a *.timing.test.ts file or the slow lane; here drive a fake clock and assert the exact value (testing 5)",
+  budget:
+    "bound real time in the slow lane with withinBudget(name, measuredMs, budgetMs) from e2e/helpers, which grows the bound with host load and logs the value (testing 5)",
   skip: "never skip, focus or defer a test to get to green; fix it or delete it, and gate a live-device test on a SIMLOCK_ variable (testing 5)",
   vacuous:
     "this assertion also passes on a failure; assert the exact value, or the named error and its code (testing 10)",
@@ -67,6 +74,7 @@ const LINE_RULES = [
     applies: (file) => !TIMING_FILE.test(file) && !SLOW_LANE.test(file),
     breaks: (source, n) => boundsRealTime(source.codeLines, n),
   },
+  { rule: "budget", applies: (file) => SLOW_LANE.test(file), breaks: boundsSlowTime },
   { rule: "skip", applies: () => true, breaks: skips },
   { rule: "vacuous", applies: () => true, breaks: vacuous },
 ];
@@ -106,6 +114,45 @@ function boundsRealTime(codeLines, n) {
   if (new RegExp(`\\bexpect\\s*\\([^;]*${CLOCK.source}`).test(line)) return true;
   const bound = /\bexpect\s*\(\s*(\w+)\s*[,)]/.exec(line);
   return bound !== null && assignedFromClock(codeLines, n, bound[1]);
+}
+
+// why: a slow test's bound is rarely on a clock read in the same statement: it is on a gap between
+// recorded arrivals, an event's timestamp or a duration the daemon logged. So the bound's own
+// argument is read too, and a number of 1000 or more, or a name that says milliseconds, is time.
+function boundsSlowTime(source, n) {
+  const line = source.codeLines[n - 1] ?? "";
+  const offset = source.starts[n - 1];
+  return [...line.matchAll(/\.toBeLessThan(?:OrEqual)?\s*\(/g)].some((m) => {
+    const open = offset + m.index + m[0].length - 1;
+    const bound = source.code.slice(open + 1, closing(source.code, open) - 1);
+    return readsAsMilliseconds(bound) || subjectReadsClock(source, offset + m.index);
+  });
+}
+
+function readsAsMilliseconds(bound) {
+  if (/\b\w*(?:_MS|Ms)\b/.test(bound)) return true;
+  return [...bound.matchAll(/\b\d[\d_]*\b/g)].some((m) => Number(m[0].replaceAll("_", "")) >= 1000);
+}
+
+// why: the `expect(` whose closing bracket sits right before the matcher at <matcher>; with a
+// message as its second argument it starts lines above, which the line-by-line rule cannot see.
+function subjectReadsClock({ code, codeLines, starts }, matcher) {
+  for (
+    let at = code.lastIndexOf("expect", matcher);
+    at !== -1;
+    at = code.lastIndexOf("expect", at - 1)
+  ) {
+    const open = /^expect\s*\(/.exec(code.slice(at, at + 16));
+    if (open === null) continue;
+    const end = closing(code, at + open[0].length - 1);
+    if (end > matcher) continue;
+    if (code.slice(end, matcher).trim() !== "") return false;
+    const subject = code.slice(at, end);
+    if (CLOCK.test(subject)) return true;
+    const name = /^expect\s*\(\s*(\w+)\s*[,)]/.exec(subject);
+    return name !== null && assignedFromClock(codeLines, lineOf(starts, at), name[1]);
+  }
+  return false;
 }
 
 function assignedFromClock(codeLines, n, name) {

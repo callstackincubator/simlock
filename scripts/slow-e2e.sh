@@ -9,19 +9,29 @@
 #   scripts/slow-e2e.sh stop      stops the running lane and what it started, and frees the lock
 #   scripts/slow-e2e.sh clean     stops what earlier runs left behind (refused while a lane runs)
 #   scripts/slow-e2e.sh check     the checks a run starts with: clean and the worker lock (neither
-#                                 while a run holds the lane lock), then free disk and builds
+#                                 while a run holds the lane lock), then free disk and the lane's
+#                                 agent-device
+#   scripts/slow-e2e.sh check --fix            the same, and installs the agent-device the
+#                                 checkout pins when the lane has none (not while a run holds
+#                                 the lock); a run starts with it
+#   scripts/slow-e2e.sh check --fix --dry-run  lists what --fix would stop, remove and install,
+#                                 and changes nothing
 #
 # Vitest arguments pass through: `-t <title>` runs one test, `--bail=1` stops at the first
 # failure. A run prints its log path and exits at once; it writes its exit code to <log>.exit
 # when it ends. Exits 75 without starting when another worktree's run holds the lock: real
 # simulators and emulators share one machine, and two lanes at once make timeouts that look
 # like bugs. Exits 69 without starting when the machine is not fit to run it: too little free
-# disk, a Simlock worker outside the lane holding the machine's worker lock, or SIMLOCK_E2E_AGENT_DEVICE naming an agent-device of another version than package.json
-# pins for @agent-device/proxy, or a checkout never built. The lock is a directory holding the runner's pid; a lock whose pid is
-# gone is stale and is taken over.
+# disk, a Simlock worker outside the lane holding the machine's worker lock, or no install of
+# the agent-device version package.json pins for @agent-device/proxy. The lock is a directory
+# holding the runner's pid; a lock whose pid is gone is stale and is taken over.
+#
+# The lane keeps its own agent-device, one npm install per pinned version, under
+# ~/.cache/simlock-slow-lane, and a run gets its path as SIMLOCK_E2E_AGENT_DEVICE, whatever the
+# caller's environment says.
 #
 # Before a run it sources `.slow-lane.env` from the main checkout's root, if there is one: this
-# machine's settings, such as SIMLOCK_E2E_AGENT_DEVICE. A run's temporary homes live under
+# machine's settings, such as SIMLOCK_PHYSICAL_ANDROID. A run's temporary homes live under
 # /tmp/simlock-slow, so `clean` and `stop` find a run's daemons, emulators and simulators by
 # that path and touch nothing else, except the simulators in Xcode's own device set whose durable
 # mark names the instance of a home under that path (a daemon run with drivers.ios.deviceSet
@@ -32,9 +42,11 @@
 # leaves booted devices behind. Its own harness tears down the devices it created.
 set -eu
 
-# why: the three overrides let the script's own tests use a scratch lock and home directory.
+# why: the overrides let the script's own tests use a scratch lock, home and tools directory.
 lock=${SIMLOCK_SLOW_LOCK:-/tmp/simlock-slow-e2e.lock}
 lane_tmp=${SIMLOCK_SLOW_TMP:-/tmp/simlock-slow}
+# why: outside lane_tmp, which every run empties, so one install serves every run of its version.
+tools=${SIMLOCK_SLOW_TOOLS:-$HOME/.cache/simlock-slow-lane}
 min_free=${SIMLOCK_SLOW_MIN_FREE_GIB:-15}
 # why: the worker lock the daemon takes (ADR 0059); src/slow-e2e.test.ts keeps this default equal to defaultWorkerLockPath.
 worker_lock=${SIMLOCK_SLOW_WORKER_LOCK:-/tmp/simlock-$(id -u)/worker.lock}
@@ -46,9 +58,10 @@ py=python3
 case $(python3 --version 2>&1) in "Python 3"*) ;; *) py=python ;; esac
 
 helper() {
-  $py - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
+  $py - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$tools" "$@" <<'EOF'
 import json, os, re, shutil, signal, subprocess, sys, tempfile, time
-lock, lane_tmp, root, min_free, worker_lock, command = sys.argv[1:7]
+lock, lane_tmp, root, min_free, worker_lock, tools, command = sys.argv[1:8]
+flags = sys.argv[8:]
 
 def read(path, default=""):
     try:
@@ -85,8 +98,15 @@ def leftovers():
             found.append((int(pid), text.split(" ")[0]))
     return found
 
-def clean():
+def clean(dry=False):
     procs = leftovers()
+    if dry:
+        for pid, name in procs:
+            print(f"would stop {pid} {name}")
+        delete_marked_simulators(dry)
+        if os.path.isdir(lane_tmp):
+            print(f"would remove {lane_tmp} ({mib(lane_tmp)} MiB)")
+        return procs
     for pid, _ in procs:
         try:
             os.kill(pid, signal.SIGTERM)
@@ -105,6 +125,17 @@ def clean():
     shutil.rmtree(lane_tmp, ignore_errors=True)
     for pid, name in procs:
         print(f"stopped {pid} {name}")
+    return []
+
+def mib(folder):
+    total = 0
+    for base, _, files in os.walk(folder):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(base, name)).st_size
+            except OSError:
+                pass
+    return total // 2**20
 
 def lane_instance_ids():
     # why: each lane home holds its instance id in instance.json (a gateway's under gateway/); the homes sit one or two levels below lane_tmp.
@@ -119,7 +150,7 @@ def lane_instance_ids():
                 pass
     return ids
 
-def delete_marked_simulators():
+def delete_marked_simulators(dry=False):
     # why: with drivers.ios.deviceSet "default" the lane's simulators live in the maintainer's Xcode set, which removing the lane folder does not clean; only a durable mark naming a lane instance proves a simulator is the lane's.
     ids = lane_instance_ids()
     devices = os.environ.get("SIMLOCK_SLOW_DEVICES") or os.path.expanduser("~/Library/Developer/CoreSimulator/Devices")
@@ -131,6 +162,9 @@ def delete_marked_simulators():
         except ValueError:
             continue
         if isinstance(mark, dict) and mark.get("instanceId") in ids:
+            if dry:
+                print(f"would delete simulator {udid}")
+                continue
             subprocess.run(["xcrun", "simctl", "shutdown", udid], capture_output=True)
             subprocess.run(["xcrun", "simctl", "delete", udid], capture_output=True)
             print(f"deleted simulator {udid}")
@@ -139,22 +173,82 @@ def free_gib(path):
     # why: os.statvfs does not exist on Windows; disk_usage reports the same free bytes.
     return shutil.disk_usage(path).free / 2**30
 
+def pinned_agent_device():
+    # why: the lane runs the agent-device release whose proxy simlock bundles; a pin that is not one exact version names no release to install.
+    pinned = json.loads(read(os.path.join(root, "package.json"), "{}")).get("dependencies", {}).get("@agent-device/proxy")
+    return pinned if isinstance(pinned, str) and re.fullmatch(r"\d+\.\d+\.\d+", pinned) else None
+
+def agent_device_folder(version):
+    return os.path.join(tools, f"agent-device-{version}")
+
+def agent_device_entry(version):
+    package = os.path.join(agent_device_folder(version), "node_modules", "agent-device")
+    entry = os.path.join(package, "bin", "agent-device.mjs")
+    try:
+        found = json.loads(read(os.path.join(package, "package.json"), "{}")).get("version")
+    except ValueError:
+        found = None
+    return entry if found == version and os.path.isfile(entry) else None
+
+def install_agent_device(version):
+    npm = shutil.which("npm")
+    if npm is None:
+        return "npm is not on PATH"
+    folder = agent_device_folder(version)
+    # why: npm writes into a folder of this call's own, renamed when whole, so a killed install never passes for one and two calls at once do not share files.
+    staging = f"{folder}.installing-{os.getpid()}"
+    try:
+        os.makedirs(staging)
+        done = subprocess.run(
+            [npm, "install", "--prefix", staging, "--no-audit", "--no-fund", "--no-save", f"agent-device@{version}"],
+            cwd=staging, capture_output=True, text=True, timeout=600,
+        )
+        if done.returncode != 0:
+            return "; ".join([l.strip() for l in done.stderr.splitlines() if l.strip()][:2]) or f"npm install exited {done.returncode}"
+        shutil.rmtree(folder, ignore_errors=True)
+        os.rename(staging, folder)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        # why: another call may have put the same version in place first.
+        return None if agent_device_entry(version) else str(error)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return None
+
 if command == "clean":
     if holder():
         print(f"busy: a slow-lane run holds the lock (pid {holder()}); stop it first", file=sys.stderr)
         sys.exit(75)
     clean()
 
+elif command == "agent-device":
+    print(agent_device_entry(pinned_agent_device() or "") or "")
+
 elif command == "check":
-    # why: a running lane's processes, home and worker are its own, not leftovers; cleaning under it fails its tests.
+    fix, dry = "--fix" in flags, "--dry-run" in flags
+    if (dry and not fix) or any(flag not in ("--fix", "--dry-run") for flag in flags):
+        print("usage: scripts/slow-e2e.sh check [--fix [--dry-run]]", file=sys.stderr)
+        sys.exit(64)
+    # why: a running lane's processes, home, worker and agent-device are its own, not leftovers; cleaning or installing under it fails its tests.
     running = holder()
-    if not running:
-        clean()
+    would_stop = [] if running else [pid for pid, _ in clean(dry)]
     problems = []
+    version = pinned_agent_device()
+    if version and not agent_device_entry(version):
+        folder = agent_device_folder(version)
+        if running or not fix:
+            problems.append(f"agent-device {version} is not installed in {folder}; run scripts/slow-e2e.sh check --fix{' once the running lane ends' if running else ''}")
+        elif dry:
+            print(f"would install agent-device {version} into {folder}")
+        else:
+            failed = install_agent_device(version)
+            if failed:
+                problems.append(f"agent-device {version} did not install into {folder}: {failed}; fix npm or the network, then run scripts/slow-e2e.sh check --fix")
+            else:
+                print(f"installed agent-device {version} into {folder}")
     # why: with no lane running, a lane worker an aborted run left is already killed by clean(), so a live holder is a worker outside the lane (ADR 0059 §4).
     try:
         owner = json.loads(read(os.path.join(worker_lock, "owner.json"), "{}"))
-        if not running and alive(owner["pid"]):
+        if not running and alive(owner["pid"]) and owner["pid"] not in would_stop:
             print(f"not fit: a Simlock worker holds this machine (pid {owner['pid']}, folder {owner['folder']}); stop it first: SIMLOCK_HOME={owner['folder']} simlock daemon stop", file=sys.stderr)
             sys.exit(69)
     except (ValueError, KeyError, TypeError):
@@ -163,15 +257,6 @@ elif command == "check":
     for path in ("/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir(), os.path.expanduser("~")):
         if free_gib(path) < float(min_free):
             problems.append(f"{free_gib(path):.1f} GiB free on the volume of {path}; the lane needs {min_free}")
-    agent_device = os.environ.get("SIMLOCK_E2E_AGENT_DEVICE")
-    if agent_device:
-        install = os.path.dirname(os.path.dirname(agent_device))
-        pinned = json.loads(read(os.path.join(root, "package.json"), "{}")).get("dependencies", {}).get("@agent-device/proxy")
-        found = json.loads(read(os.path.join(install, "package.json"), "{}")).get("version")
-        if pinned and found != pinned:
-            problems.append(f"SIMLOCK_E2E_AGENT_DEVICE is agent-device {found or 'of no version'}; package.json pins {pinned}")
-        if not os.path.isdir(os.path.join(install, "dist")):
-            problems.append(f"SIMLOCK_E2E_AGENT_DEVICE's install {install} has no dist/: build it first")
     for problem in problems:
         print(f"unfit: {problem}", file=sys.stderr)
     sys.exit(69 if problems else 0)
@@ -221,7 +306,7 @@ EOF
 }
 
 case "${1:-}" in
-  status | stop | clean | check) helper "$1"; exit $? ;;
+  status | stop | clean | check) helper "$@"; exit $? ;;
 esac
 
 script=test:e2e:slow
@@ -251,9 +336,15 @@ if ! mkdir "$lock" 2>/dev/null; then
   rm -rf "$lock"
   mkdir "$lock"
 fi
-if ! helper check; then
+# why: a caller reads this script's output as the log path, so what the check stops and installs goes to stderr.
+if ! helper check --fix >&2; then
   rm -rf "$lock"
   exit 69
+fi
+# why: the lane's own install, not a path set by hand, so the version is always the one this checkout pins.
+agent_device=$(helper agent-device)
+if [ -n "$agent_device" ]; then
+  export SIMLOCK_E2E_AGENT_DEVICE="$agent_device"
 fi
 echo "$root" > "$lock/root"
 echo "$log" > "$lock/log"
