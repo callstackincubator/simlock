@@ -54,10 +54,10 @@ Tunnels (`device-tcp.ts`):
 
 - **A restart between `simctl clone` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `simctl delete`.
 - **Runtime downloads outlive deletion (#79).** Reclaim them in Xcode → Settings → Platforms.
-- **Slim costs (#87, #172).** Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight, StoreKit, universal links, Siri, iCloud sync.
-- **The overrides file is undocumented.** If Apple ignores it, the readback grants `full`.
+- **Slim costs (#87, #172).** Below iOS 18.5 slim gets `full`. Slim devices lose push, Spotlight, StoreKit, universal links, Siri, iCloud sync.
+- **The overrides file is undocumented.** If Apple ignores it, readback grants `full`.
 - **A recovered slim device runs full but is recorded `slim` (#174)** until its next `makeReady`.
-- **A cold slim lease takes a full cold boot;** MCP clients need a longer timeout.
+- **A cold slim lease takes a full cold boot;** MCP needs a longer timeout.
 - **A screen stream can freeze after a reboot under its lease:** reopen the Screen tab.
 - **An iPhone's rotation is unproven on hardware**; a Duo's panel switch is proven.
 - **A foldable's stream follows SpringBoard's `DisplayContentMode` log** (ADR 0075): another wording leaves it, and taps, on the panel picked at open; a tap between a fold and the new size lands on the old panel.
