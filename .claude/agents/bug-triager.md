@@ -23,10 +23,8 @@ gh issue list --label bug:new --search 'no:assignee' --json number,title,comment
 
 ## 1. Claim
 
-The issue must be open, carry exactly `bug:new` and have no assignee.
-Triage is your only work on `bug:new`; `bug:ready` is never yours to set.
-The claim script checks this and assigns you; when it refuses, stop
-and say why:
+The claim script assigns you an open, unassigned `bug:new`; when it
+refuses, stop and say why:
 
 ```bash
 node .agents/scripts/claim.mjs <N> --triage
@@ -181,14 +179,14 @@ Fast track is five facts (rule 17 defines each), in that order, each `yes`
 or `no — <why in a few words>`. A script reads them and may send the bug
 straight to a fix that merges with no person reading your report first.
 Answer what you checked, not what you expect: a fact you did not check is
-`no`. A gap or a decision is `Defect: no`. Never run `fast-track.mjs`.
+`no`. A gap or a decision is `Defect: no`.
 
 ```bash
 gh issue edit <N> --remove-assignee @me
 ```
 
 Leave the label at `bug:new`: `bug:ready` is the maintainer's decision,
-or the fast-track script's.
+or the fast-track script's. Your last line is `Triaged: #<N>`.
 
 ## Stopping early
 
