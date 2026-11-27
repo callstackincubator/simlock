@@ -129,10 +129,11 @@ const TSC_LAUNCHERS = new Set([
   "npx --yes",
   "npx --no-install",
 ]);
-// why: only finds the text of a candidate run in the blanked command: a launcher from the list,
-// the program, plain arguments, then the command's end or a redirect. `isTypecheck` decides.
+// why: only finds the text of a candidate run in the blanked command: at the start of a word, a
+// launcher from the list, the program as a whole word (any path, so a drive letter or `~` stays
+// in it), plain arguments, then the command's end or a redirect. `isTypecheck` decides.
 const TSC_RUN =
-  /(?<![\w./-])(?:pnpm(?:[ \t]+exec)?[ \t]+|npx(?:[ \t]+(?:-y|--yes|--no-install))?[ \t]+)?[\w./-]*\btsc(?![\w./-])(?:[ \t]+[\w./=-]+(?![\w./=-]|[<>]))*(?=[ \t]*(?:$|[\n;&|)`]|\d*[<>]))/g;
+  /(?<=^|[\s;&|()`])(?:pnpm(?:[ \t]+exec)?[ \t]+|npx(?:[ \t]+(?:-y|--yes|--no-install))?[ \t]+)?(?:[^\s;&|()<>`'"$\\]*\/)?tsc(?![^\s;&|()<>`])(?:[ \t]+[\w./=-]+(?![\w./=-]|[<>]))*(?=[ \t]*(?:$|[\n;&|)`]|\d*[<>]))/g;
 const TIMEOUT_NOTE =
   "The tool guard set `timeout: 600000` on this Bash call: a test run under the default 120 s " +
   "moves to the background.";
