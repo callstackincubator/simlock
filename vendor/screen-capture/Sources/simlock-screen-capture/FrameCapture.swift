@@ -6,7 +6,8 @@
 // callbacks only notice a composite, and `CopyStage` (FrameSelection.swift, ours) decides on the
 // pacing grid and copies on a queue of its own — and the callbacks hopping onto this actor
 // instead of asserting they already run on it, an assertion that trapped the 0.8.0 release build
-// on macOS 15.7.7 before it wrote a frame; everything else here is upstream's.
+// on macOS 15.7.7 before it wrote a frame, and the `RegistrationRecord` that unregisters what a
+// killed program left behind; everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -50,6 +51,7 @@ actor FrameCapture {
 
     private var descriptors: [NSObject] = []
     private var callbackUUIDs: [ObjectIdentifier: UUID] = [:]
+    private var recordedUDID = ""
     private var ioClient: NSObject?
     private var expectedScreenSizes: [FramebufferSurfaceSize] = []
     private var preferredScreenSize: FramebufferSurfaceSize?
@@ -68,6 +70,7 @@ actor FrameCapture {
         guard state == "Booted" else {
             throw makeError(2, "Device not booted (state: \(state))")
         }
+        self.recordedUDID = deviceUDID
         self.expectedScreenSizes = Self.nativeScreenSizes(for: device)
         if expectedScreenSizes.count > 1 {
             let summary = expectedScreenSizes.map { "\($0.width)x\($0.height)" }.joined(separator: ", ")
@@ -113,11 +116,24 @@ actor FrameCapture {
         seedGate.reset()
         descriptors = candidates
 
+        // why: a program that was killed or crashed never unregistered, and the simulator's renderer
+        // logs one fault per frame for each registration left, until the simulator shuts down. The
+        // dead program's record names them; which descriptor held which is not recorded, so each
+        // is tried on every descriptor. `e2e/slow-ios-stream.test.ts` shows on a real simulator
+        // that this silences the faults.
+        let record = RegistrationRecord(deviceUDID: recordedUDID)
+        for leftover in record.takeLeftovers() {
+            for desc in candidates where desc.responds(to: unregSel) {
+                desc.perform(unregSel, with: leftover)
+            }
+        }
+
         // Registering screen callbacks is what causes SimulatorKit to wire the
         // display pipeline to our client and populate `framebufferSurface`.
         for desc in candidates {
             try registerFrameCallbacks(desc: desc)
         }
+        record.write(Array(callbackUUIDs.values))
 
         if let best = pickBestDescriptor() {
             let surfSel = NSSelectorFromString("framebufferSurface")
@@ -325,6 +341,7 @@ actor FrameCapture {
             }
         }
         callbackUUIDs.removeAll()
+        RegistrationRecord(deviceUDID: recordedUDID).release()
         descriptors.removeAll()
         seedGate.reset()
         copyStage?.stop()

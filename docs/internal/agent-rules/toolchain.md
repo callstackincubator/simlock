@@ -207,7 +207,8 @@ envelope -- and the console lane runs a stand-in program that writes the same
 envelope from stills (`e2e/console/screen-capture.ts`), named by the fake
 driver's `screenCaptureCommand`. On a Mac with Xcode, `swift test
 --package-path vendor/screen-capture` runs the Swift tests (the envelope's
-size changes, the log-line parser, the panel follower and its watchdog). A
+size changes, the log-line parser, the panel follower and its watchdog, a
+dead daemon, the registration record); CI's `Swift tests` job runs it too. A
 change to the Swift program that reads a real screen is checked by
 hand on a machine with a simulator, where
 `node vendor/screen-capture/scripts/unframe.mjs <capture> out.264` turns the

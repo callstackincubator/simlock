@@ -141,7 +141,8 @@ function bodyOf(
   return new ReadableStream<Uint8Array>({
     cancel: async (reason) => {
       // why: the program's stdin closing is its stop signal; letting go of its stdout first breaks
-      // its pipe, and it dies on SIGPIPE before it can stop the stream cleanly.
+      // its pipe, so its next frame write fails and it ends the stream itself, where it should
+      // have been asked to stop first.
       await close();
       await reader.cancel(reason).catch(() => undefined);
     },
