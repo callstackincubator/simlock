@@ -115,6 +115,15 @@ describe("fast-track.mjs entry check", { timeout: 30_000 }, () => {
     expect(result.calls).toBe("POST labels[]=bug:ready labels[]=fast-track\nDELETE \n");
   });
 
+  it("with --dry-run prints the decision and changes no label", () => {
+    const pass = fastTrack({}, "--dry-run");
+    const hold = fastTrack({ comments: [report({ "One fix": "no — two ways" })] }, "--dry-run");
+
+    expect(pass).toEqual({ status: 0, out: "fast-track: #5 would be bug:ready\n", calls: "" });
+    expect(hold).toMatchObject({ status: 1, calls: "" });
+    expect(hold.out).toContain("fast-track: #5 held: One fix: no — two ways");
+  });
+
   it("reads the newest report, and passes a person's comments before it and an agent's after it", () => {
     const result = fastTrack({
       comments: [
