@@ -42,7 +42,7 @@ the status is stale.
 | [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034; §1's layout narrowed by 0036 (`state.db`); §1, §2, §3, §5, §6 and §7 narrowed by 0048 for iOS under `deviceSet: "default"`; Consequences' two-instance line narrowed by 0059; §1, §3, §4, §5 and §6 narrowed by 0061; §4's "cannot see" line narrowed by 0064 |
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted; §2, §3, §5, §8, §9, the overrides' location and the no-enable-pass cost superseded by 0060; §10 narrowed by 0060 |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
-| [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease) |
+| [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease); §1 narrowed by 0094 |
 | [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by 0039; §19c's piped stdin narrowed by 0058; items 10 and 11, decision 5 and requirements 14 and 30 narrowed by 0074; Non-goals (port forwarding) narrowed by 0054 and 0064; Non-goals (file transfer) and §19b′ narrowed by 0067 |
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted; §2 narrowed by 0032 (the event record is a database) |
 | [0007](0007-a-lease-request-chooses-the-device-mode.md) | A lease request chooses the device mode | Accepted |
@@ -126,3 +126,4 @@ the status is stale.
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
 | [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted; narrows 0061 §1 and §2 and 0076 §1 and §2 |
 | [0091](0091-an-operator-names-a-workers-tags-and-a-lease-may-require-them.md) | An operator names a worker's tags, and a lease may require them | Accepted; narrows 0026 §1 and 0030 §5 |
+| [0094](0094-a-worker-ends-a-lease-whose-device-goes-unused.md) | A worker ends a lease whose device goes unused | Accepted — not yet implemented; narrows 0004 §1 |
