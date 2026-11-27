@@ -231,9 +231,9 @@ is open, done means closed as completed.
 14. **Review before ready.** Every PR starts in draft and leaves it only
     after [the review protocol](../REVIEW.md): independent spec, code and
     claims lenses on a pinned commit, rules and briefs from the PR base, and
-    at most one full round, one targeted round 2 and one fix-check. A PR
-    with an open blocking finding or an incomplete assessment at the cap
-    stays in draft for the maintainer.
+    at most one full round, one targeted round 2, one fix-check and the
+    protocol's one extension. A PR with an open blocking finding or an
+    incomplete assessment at the cap stays in draft for the maintainer.
 
 15. **An agent merges only through the gate, and a feature merges as one
     stack.** `.agents/scripts/merge-pr.sh`
@@ -255,7 +255,7 @@ is open, done means closed as completed.
     section with its counts line, no "spec needs" line, the agent footer),
     green CI, and no conflict. Before calling it the agent also checks what
     the script cannot read: no blocking finding is open and assessment is complete. A conflict, or red
-    CI, gets one fix run, a fix check (rule 14) and the gate again. Anything else short of that parks the issue with
+    CI, gets one fix run, a fix check (rule 14) unless `.agents/scripts/fix-kind.mjs` passes the fix, and the gate again. Anything else short of that parks the issue with
     a handoff and leaves the PR for the maintainer.
 
 16. **The slow lane runs one at a time, through its script.** The slow
