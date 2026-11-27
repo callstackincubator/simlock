@@ -64,12 +64,13 @@ if (spawnSync("git", ["merge-base", "--is-ancestor", previous, head]).status !==
 }
 const before = prDiff(previous);
 const after = prDiff(head);
-// why: patch-id reads no bytes of a binary file, so with equal ids those are still compared.
-const compared = before.id === after.id ? (line) => line.startsWith("binary ") : () => true;
-const part = (diff, path) => (diff.files.get(path) ?? []).filter(compared).join("\n");
-const changed = [...new Set([...before.files.keys(), ...after.files.keys()])].filter(
-  (path) => part(before, path) !== part(after, path),
-);
+const part = (diff, path) => (diff.files.get(path) ?? []).join("\n");
+const changed =
+  before.id === after.id
+    ? []
+    : [...new Set([...before.files.keys(), ...after.files.keys()])].filter(
+        (path) => part(before, path) !== part(after, path),
+      );
 for (const path of changed) {
   if (!isTest(path)) {
     reasons.push(`${path}: not a test file`);

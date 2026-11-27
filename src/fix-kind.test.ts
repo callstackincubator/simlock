@@ -15,6 +15,7 @@ const SCRIPT = join(
 );
 const SOURCE = "src/a.ts";
 const TEST = "src/a.test.ts";
+const IMAGE = "src/a.png";
 const lines = (...all: string[]) => `${all.join("\n")}\n`;
 const BASE_SOURCE = lines("one", "two", "three", "four", "five", "six", "seven");
 const PR_SOURCE = BASE_SOURCE.replace("two", "two by the PR");
@@ -46,7 +47,7 @@ function repository() {
   git("init", "-q", "-b", "main");
   commit({ [SOURCE]: BASE_SOURCE });
   git("switch", "-qc", "task");
-  const previous = commit({ [SOURCE]: PR_SOURCE, [TEST]: PR_TEST });
+  const previous = commit({ [SOURCE]: PR_SOURCE, [TEST]: PR_TEST, [IMAGE]: "\0one" });
   const onMain = (files: Readonly<Record<string, string>>) => {
     git("switch", "-q", "main");
     commit(files);
@@ -99,6 +100,11 @@ describe("fix-kind.mjs", { timeout: 60_000 }, () => {
   it.each([
     ["a source file", { [SOURCE]: PR_SOURCE.replace("six", "six again") }, `${SOURCE}: not a test`],
     ["a doc", { "src/AGENTS.md": "- a rule\n" }, "src/AGENTS.md: not a test file"],
+    [
+      "a binary file beside a test",
+      { [IMAGE]: "\0two", [TEST]: PR_TEST.replace("toBe(2)", "toEqual(2)") },
+      `${IMAGE}: not a test file`,
+    ],
     ["a doc among the e2e tests", { "e2e/README.md": "text\n" }, "e2e/README.md: not a test file"],
     [
       "a test title",
