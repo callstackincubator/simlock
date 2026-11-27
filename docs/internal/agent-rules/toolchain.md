@@ -328,3 +328,6 @@ what goes in the findings file and where the result is posted. With
 starts with a rule and its number back as that rule plus `detail`; the
 script's header says what it refuses. Runs tagged `stage=replay` (a frozen snapshot reviewed
 again by `review-replay.sh`) are left out unless `--replay` is given.
+`node .agents/scripts/delivery-metrics.mjs [--end <iso>] [--days 14] [--prs <n,n>] [--json]`
+prints cost, time and autonomy per merged PR, the orchestrator included; its header lists every
+option. Run it weekly: it keeps the sleep record the wall times need.
