@@ -18,7 +18,7 @@
 // --transcripts names the project folders to read, `*` allowed in the last part; the default is
 // every folder under Claude Code's projects directory whose name holds the main checkout's.
 // Transcripts changed in the 16 days before the window are read too, for work that started
-// before it. --repo is the repository on GitHub (default: GH_REPO, else the origin remote's).
+// before it; GitHub is read up to --days after --end, for the bugs filed after the window. --repo is the repository on GitHub (default: GH_REPO, else the origin remote's).
 // --sleep is where the sleep record is kept (default: delivery-metrics/sleep.json in the
 // clone's git directory); run the script weekly or the record has gaps
 // (delivery-metrics-sleep.mjs). --input reads `{ prs, issues, comments, pendingDecisions }`
@@ -87,7 +87,7 @@ console.log(options.json ? JSON.stringify(report, null, 2) : reportText(report))
 
 function fetched() {
   const repo = options.repo ?? repository();
-  const now = Date.now();
+  const now = Math.min(Date.now(), window.to + days * DAY);
   const prs = mergedPrs(repo, window.from - EARLIER_PRS_DAYS * DAY, now);
   if (numbers === null) return { prs, ...autonomyData(repo, window.from, now) };
   return { prs: prs.map((pr) => (numbers.includes(pr.number) ? withFiles(repo, pr) : pr)) };

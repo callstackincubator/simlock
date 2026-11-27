@@ -4,7 +4,9 @@
 //   heldAtEntry       bugs whose newest triage report of the window says `no` on a Fast track
 //                     line, by line
 //   heldAtExit        issues with a `## Handoff` of the window that quotes the fast-track exit
-//                     check, by what the check named
+//                     check's line (`fast-track: #<n> held: PR #<m> ...; PR #<m> ...`, with or
+//                     without `#<n> held:`), by the holds that line lists; the newest such
+//                     handoff of an issue counts
 //   handoffs          every `## Handoff` comment of the window
 //   followUpBugs      bugs filed in the window whose body, or whose triage report's Root cause,
 //                     names a PR merged in the 28 days before the bug was filed (by number, by
@@ -17,11 +19,14 @@ import { median, quantile } from "./delivery-metrics-stats.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 const FOLLOW_UP_DAYS = 28;
-const EXIT_REASONS = [
-  [/changes \d+ lines, over/, "lines over the limit"],
-  [/changes \d+ files, over/, "files over the limit"],
-  [/Decision taken/, "a Decision taken comment"],
-  [/touches /, "a surface path"],
+// why: a handoff's prose names lines, files, paths and decisions too; only the line the exit
+// check printed says why it held, one `PR #<m> ...` part per hold (fast-track.mjs, exitCheck).
+const HELD_LINE = /fast-track:[ \t]*(?:#\d+ held:[ \t]*)?(PR #\d+ [^\n]*)/;
+const EXIT_HOLDS = [
+  [/^PR #\d+ changes \d+ lines, over \d+/, "lines over the limit"],
+  [/^PR #\d+ changes \d+ files, over \d+/, "files over the limit"],
+  [/^PR #\d+ has a "Decision taken" comment/, "a Decision taken comment"],
+  [/^PR #\d+ touches \S/, "a surface path"],
 ];
 
 export function autonomy({ window, prs, issues, comments, pendingDecisions }) {
@@ -66,13 +71,22 @@ function heldAtEntry(comments) {
 
 function heldAtExit(handoffs) {
   const reasons = new Map();
-  for (const c of handoffs.filter((handoff) => /fast-track:/.test(handoff.body))) {
-    const named = EXIT_REASONS.filter(([shape]) => shape.test(c.body)).map(([, reason]) => reason);
-    reasons.set(c.issue, named.length > 0 ? named : ["other"]);
+  for (const c of handoffs) {
+    const holds = exitHolds(c.body);
+    if (holds.length > 0) reasons.set(c.issue, holds);
   }
   const byReason = {};
   for (const reason of [...reasons.values()].flat()) byReason[reason] = (byReason[reason] ?? 0) + 1;
   return { issues: reasons.size, byReason };
+}
+
+function exitHolds(body) {
+  const line = HELD_LINE.exec(body)?.[1] ?? "";
+  const reasons = line
+    .split("; ")
+    .map((hold) => EXIT_HOLDS.find(([shape]) => shape.test(hold))?.[1])
+    .filter(Boolean);
+  return [...new Set(reasons)];
 }
 
 function followUp(bug, prs, comments) {

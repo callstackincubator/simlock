@@ -303,12 +303,21 @@ function fixRunsOf(runs) {
 }
 
 function findingsOf(body) {
-  const found = [...body.matchAll(COUNTS)];
+  const found = [...reviewSection(body).matchAll(COUNTS)];
   if (found.length === 0) return null;
   return {
     raised: found.reduce((n, m) => n + Number(m[2]), 0),
     fixed: found.reduce((n, m) => n + Number(m[3]), 0),
   };
+}
+
+// why: a body can quote a counts line anywhere; the one under `## Review` is this PR's.
+function reviewSection(body) {
+  const start = /^## Review[ \t]*$/m.exec(body);
+  if (start === null) return "";
+  const rest = body.slice(start.index + start[0].length);
+  const next = /^## /m.exec(rest);
+  return next === null ? rest : rest.slice(0, next.index);
 }
 
 const total = (object) => Object.values(object).reduce((a, b) => a + b, 0);

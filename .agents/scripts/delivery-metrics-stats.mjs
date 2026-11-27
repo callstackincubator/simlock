@@ -345,6 +345,7 @@ export function byStage(list) {
   ];
   return stages
     .map((stage) => stageRow(stage, list, all))
+    .filter((row) => row.prs > 0)
     .sort((a, b) => b.usd.sum - a.usd.sum || a.stage.localeCompare(b.stage));
 }
 
