@@ -2,9 +2,9 @@
 // `node .agents/scripts/review-ledger.mjs <pr> --issue <n> --findings <file.json> --round
 // <r>:<sha> [--round <r>:<sha> ...] [--verified <trigger>:<sha> ...] [--skipped <roles>]
 // [--notes <file>] [--rejected <file>] [--incomplete <why>] [--dry-run]`: posts a PR's
-// `## Review ledger` comment
-// (docs/internal/REVIEW.md, "Measurement"), writes the PR body's `## Review` section
-// (review-section.mjs) and then checks the PR body, so none of them is built or run by hand.
+// `## Review ledger` comment (docs/internal/REVIEW.md, "Measurement"), writes the PR body's
+// `## Review` section (review-section.mjs) and then checks the PR body, so none of them is
+// built or run by hand.
 //
 // For the section: `--skipped spec,claims` names the reviews the diff's kind left out, `--notes`
 // a file of the reports' note lines (`- <role>: ...`), `--rejected` a file of the rejected lines
@@ -21,10 +21,12 @@
 // the findings file in a `json` code block, then `*Written by an agent.*`. It refuses (exit 2,
 // nothing posted) a sha that is no commit after fetching the PR's head, a fix-check with no
 // trigger, a findings file review-metrics.mjs rejects, and a finding with no `round` or a round
-// no --round names; it warns on stderr when a sha is not in the PR head's history. It updates the PR's existing comment headed `## Review ledger`, else posts a new one,
-// prints `ledger: updated <comment url>` or `ledger: posted <url>`, sets the body's Review section
-// through issue-body.mjs, then runs `pr-body-check.mjs <pr>`, prints its output and exits with
-// its code. `--dry-run` prints the comment and the section and does none of it. Usage errors exit 2. The repo is GH_REPO, else the origin remote's owner/name.
+// no --round names; it warns on stderr when a sha is not in the PR head's history. It updates
+// the PR's existing comment headed `## Review ledger`, else posts a new one, prints `ledger:
+// updated <comment url>` or `ledger: posted <url>`, sets the body's Review section through
+// issue-body.mjs, then runs `pr-body-check.mjs <pr>`, prints its output and exits with its
+// code. `--dry-run` prints the comment and the section and does none of it. Usage errors exit
+// 2. The repo is GH_REPO, else the origin remote's owner/name.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
