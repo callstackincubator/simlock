@@ -6,13 +6,17 @@
 // base with <base>.
 //
 // Exit 0, one line `verified by: script (...)`: no finding is `open`, and either
-//   - the PR adds and removes the same lines at both commits (equal `git patch-id`): a merge of
-//     the base that kept both sides; or
-//   - every file whose part of the PR's diff changed is a test file (diff-kind.mjs's rule, docs
-//     left out), and no changed line of it is a comment or a test title.
+//   - the PR adds and removes the same lines at both commits, compared character for character:
+//     a merge of the base that kept both sides; or
+//   - every file whose part of the PR's diff changed is a test script (diff-kind.mjs's rule; a
+//     `.ts` or `.js` file, no JSX), and between the two commits only numbers changed in it, or
+//     blank lines, each provably outside every string and comment: the line pair is equal but
+//     for digits outside its quotes, it holds no backtick, backslash or bare slash, no backtick
+//     comes before it in the file, and no block comment is open above it.
 // Exit 1, one `fix-kind: <what>: <why>` line each: an open finding, <previous> no ancestor of
-// <head> (a rebase), a changed file that is no test, a changed comment or test title. The fix
-// gets its fix-check. Exit 2: usage, or a commit this clone lacks.
+// <head> (a rebase), a changed file that is no test script, a changed test line the script
+// cannot prove holds no title, string or comment. The fix gets its fix-check. Exit 2: usage, or
+// a commit this clone lacks.
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { option } from "./cli-args.mjs";
@@ -50,11 +54,8 @@ try {
   refuse(`fix-kind: --findings ${findingsFile}: ${error.message}`);
 }
 
-const isTest = (path) =>
-  (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || path.startsWith("e2e/")) && !/\.mdx?$/.test(path);
-const COMMENT = /(?:^|\s)\/\/|\/\*|^\*/;
-const TITLE =
-  /\b(?:it|test|describe)(?:\.\w+)*(?:\([^)]*\))?\s*\(\s*["'`]|^\]?\)\(\s*["'`]|^["'`].*["'`],?$/;
+const isTest = (path) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || path.startsWith("e2e/");
+const SCRIPT = /\.[cm]?[jt]s$/;
 
 const reasons = findings
   .filter((f) => f.outcome === "open")
@@ -64,23 +65,20 @@ if (spawnSync("git", ["merge-base", "--is-ancestor", previous, head]).status !==
 }
 const before = prDiff(previous);
 const after = prDiff(head);
-const part = (diff, path) => (diff.files.get(path) ?? []).join("\n");
-const changed =
-  before.id === after.id
-    ? []
-    : [...new Set([...before.files.keys(), ...after.files.keys()])].filter(
-        (path) => part(before, path) !== part(after, path),
-      );
+const part = (diff, path) => (diff.get(path) ?? []).join("\n");
+const changed = [...new Set([...before.keys(), ...after.keys()])].filter(
+  (path) => part(before, path) !== part(after, path),
+);
 for (const path of changed) {
-  if (!isTest(path)) {
-    reasons.push(`${path}: not a test file`);
+  if (!isTest(path) || !SCRIPT.test(path)) {
+    reasons.push(`${path}: not a test script`);
     continue;
   }
-  const claim = delta(before.files.get(path) ?? [], after.files.get(path) ?? [])
-    .map((line) => line.slice(1).trim())
-    .find((line) => COMMENT.test(line) || TITLE.test(line));
-  if (claim !== undefined) {
-    reasons.push(`${path}: a comment or test title changed: "${claim.slice(0, 60)}"`);
+  const unsure = unsureLine(path);
+  if (unsure !== null) {
+    reasons.push(
+      `${path}: more than a number outside strings and comments changed: "${unsure.trim().slice(0, 60)}"`,
+    );
   }
 }
 if (reasons.length > 0) {
@@ -91,14 +89,13 @@ const range = `${previous.slice(0, 9)}..${head.slice(0, 9)}`;
 console.log(
   changed.length === 0
     ? `verified by: script (fix-kind ${range}: the PR adds and removes the same lines)`
-    : `verified by: script (fix-kind ${range}: only test code changed: ${changed.join(", ")})`,
+    : `verified by: script (fix-kind ${range}: only numbers in test code changed: ${changed.join(", ")})`,
 );
 
 // why: -U0 leaves a merge's new context lines out, so only the PR's own lines are compared.
 function prDiff(commit) {
   const fork = git("merge-base", commit, base).trim();
   const text = git("diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", fork, commit);
-  const id = execFileSync("git", ["patch-id", "--stable"], { encoding: "utf8", input: text });
   const files = new Map();
   let lines = null;
   for (const line of text.split("\n")) {
@@ -111,24 +108,103 @@ function prDiff(commit) {
         encoding: "utf8",
       });
       lines?.push(`binary ${blob.stdout.trim()}`);
-    } else if (/^[+-]/.test(line) && !/^(?:\+\+\+|---) /.test(line)) {
-      lines?.push(line);
+    } else if (/^(?:[+-]|old mode|new mode|new file mode|deleted file mode)/.test(line)) {
+      if (!/^(?:\+\+\+|---) /.test(line)) lines?.push(line);
     }
   }
-  return { id: id.split(" ")[0] ?? "", files };
+  return files;
 }
 
-function delta(old, now) {
-  const left = (from, other) => {
-    const counts = new Map();
-    for (const line of other) counts.set(line, (counts.get(line) ?? 0) + 1);
-    return from.filter((line) => {
-      const count = counts.get(line) ?? 0;
-      counts.set(line, count - 1);
-      return count <= 0;
-    });
+// why: the first changed line of a test script that may hold a title, a string or a comment, or
+// null when every hunk between the two commits is blank lines or numbers in plain code.
+function unsureLine(path) {
+  const texts = [previous, head].map((commit) => {
+    const shown = spawnSync("git", ["show", `${commit}:${path}`], { encoding: "utf8" });
+    return shown.status === 0 ? shown.stdout.split("\n") : [];
+  });
+  const diff = git(
+    "diff",
+    "-U0",
+    "--no-renames",
+    "--no-color",
+    "--no-ext-diff",
+    previous,
+    head,
+    "--",
+    path,
+  );
+  for (const hunk of diff.split(/^@@ /m).slice(1)) {
+    const at = /^-(\d+)(?:,\d+)? \+(\d+)/.exec(hunk);
+    const body = hunk.split("\n").slice(1);
+    const sides = ["-", "+"].map((sign, side) =>
+      body
+        .filter((line) => line.startsWith(sign))
+        .map((line, i) => ({
+          text: line.slice(1),
+          n: Number(at[side + 1]) + i,
+          file: texts[side],
+        })),
+    );
+    const all = sides.flat();
+    const unsure =
+      all.find((line) => !inPlainCode(line)) ??
+      (all.every((line) => line.text.trim() === "") ? undefined : unpaired(sides));
+    if (unsure !== undefined) return unsure.text === "" ? "a blank line" : unsure.text;
+  }
+  return null;
+}
+
+// why: a removed line and the added line in its place must be the same text but for digits
+// outside quotes, with nothing outside the quotes that could start a comment or a regex.
+function unpaired([removed, added]) {
+  if (removed.length !== added.length) return added[0] ?? removed[0];
+  return added.find((line, i) => {
+    const now = masked(line.text);
+    return now === null || now !== masked(removed[i].text);
+  });
+}
+
+// why: null for a line this cannot read as code and plain quoted strings: a template, an escape,
+// a quote left open, or a slash or a leading star outside the quotes. Else the line with each
+// number outside its quotes replaced by 0.
+function masked(text) {
+  if (/[`\\]/.test(text)) return null;
+  let quote = null;
+  let out = "";
+  let code = "";
+  let piece = "";
+  const flush = () => {
+    out += piece.replace(/(?<![\w$])\d[\d_.]*/g, "0");
+    code += piece;
+    piece = "";
   };
-  return [...left(old, now), ...left(now, old)];
+  for (const char of text) {
+    if (quote !== null) {
+      out += char;
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      flush();
+      quote = char;
+      out += char;
+    } else {
+      piece += char;
+    }
+  }
+  flush();
+  return quote !== null || /\/|^\s*\*/.test(code) ? null : out;
+}
+
+// why: a line is inside no template literal when no backtick comes before it, inside no block
+// comment when the last opener above it is closed, and continues no string when the line above
+// ends without a backslash.
+function inPlainCode({ file, n }) {
+  const above = file.slice(0, n - 1).join("\n");
+  const opened = above.lastIndexOf("/*");
+  return (
+    !above.includes("`") &&
+    (opened === -1 || above.lastIndexOf("*/") >= opened + 2) &&
+    !above.trimEnd().endsWith("\\")
+  );
 }
 
 function refuse(message) {

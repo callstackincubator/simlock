@@ -19,7 +19,27 @@ const IMAGE = "src/a.png";
 const lines = (...all: string[]) => `${all.join("\n")}\n`;
 const BASE_SOURCE = lines("one", "two", "three", "four", "five", "six", "seven");
 const PR_SOURCE = BASE_SOURCE.replace("two", "two by the PR");
-const PR_TEST = lines('it("adds", () => {', "  expect(add(1, 1)).toBe(2);", "});");
+const WORKFLOW = ".github/workflows/ci.yml";
+const PR_WORKFLOW = lines("on:", "  push:", "    branches: [main]");
+const PR_TEST = lines(
+  "const LIMIT = 20;",
+  'const NAME = "case 1";',
+  "const WAIT = 5; // seconds: 5",
+  "it.each([",
+  '  ["adds", 1, 2],',
+  '])("%s", (_, a, sum) => {',
+  "  expect(add(a, a)).toBe(sum);",
+  "}, 30_000);",
+  "/*",
+  " waits 20 s",
+  "*/",
+  "const LABEL = `sum`;",
+  "const AFTER = 5;",
+);
+const NUMBERS = PR_TEST.replace("= 20;", "= 60;")
+  .replace("30_000", "60_000")
+  .replace("1, 2]", "1, 3]");
+const UNSURE = "more than a number outside strings and comments changed";
 
 interface Finding {
   readonly id: string;
@@ -47,7 +67,12 @@ function repository() {
   git("init", "-q", "-b", "main");
   commit({ [SOURCE]: BASE_SOURCE });
   git("switch", "-qc", "task");
-  const previous = commit({ [SOURCE]: PR_SOURCE, [TEST]: PR_TEST, [IMAGE]: "\0one" });
+  const previous = commit({
+    [SOURCE]: PR_SOURCE,
+    [TEST]: PR_TEST,
+    [IMAGE]: "\0one",
+    [WORKFLOW]: PR_WORKFLOW,
+  });
   const onMain = (files: Readonly<Record<string, string>>) => {
     git("switch", "-q", "main");
     commit(files);
@@ -87,34 +112,74 @@ describe("fix-kind.mjs", { timeout: 60_000 }, () => {
     );
   });
 
-  it("passes a fix that changes only an assertion in a test file", () => {
+  it.each([
+    ["numbers outside every string and comment", NUMBERS],
+    ["a blank line above every template literal", `\n${PR_TEST}`],
+  ])("passes a fix that changes only %s in a test script", (_, text) => {
     const { check, commit } = repository();
-    commit({ [TEST]: PR_TEST.replace("toBe(2)", "toEqual(2)") });
+    commit({ [TEST]: text });
 
     expect(check()).toEqual({
       status: 0,
-      stdout: expect.stringContaining(`only test code changed: ${TEST})`),
+      stdout: expect.stringContaining(`only numbers in test code changed: ${TEST})`),
     });
   });
 
   it.each([
     ["a source file", { [SOURCE]: PR_SOURCE.replace("six", "six again") }, `${SOURCE}: not a test`],
-    ["a doc", { "src/AGENTS.md": "- a rule\n" }, "src/AGENTS.md: not a test file"],
+    ["a doc", { "src/AGENTS.md": "- a rule\n" }, "src/AGENTS.md: not a test script"],
+    ["a binary file beside a test", { [IMAGE]: "\0two", [TEST]: NUMBERS }, `${IMAGE}: not a test`],
     [
-      "a binary file beside a test",
-      { [IMAGE]: "\0two", [TEST]: PR_TEST.replace("toBe(2)", "toEqual(2)") },
-      `${IMAGE}: not a test file`,
+      "a doc among the e2e tests",
+      { "e2e/README.md": "text\n" },
+      "e2e/README.md: not a test script",
     ],
-    ["a doc among the e2e tests", { "e2e/README.md": "text\n" }, "e2e/README.md: not a test file"],
+    ["a fixture among the e2e tests", { "e2e/a.json": "{}\n" }, "e2e/a.json: not a test script"],
+    ["a test with JSX", { "src/b.dom.test.tsx": "x\n" }, "src/b.dom.test.tsx: not a test script"],
     [
-      "a test title",
-      { [TEST]: PR_TEST.replace('"adds"', '"adds two numbers"') },
-      `${TEST}: a comment or test title changed: "it("adds", () => {"`,
+      "only the indentation of a line the PR added",
+      { [WORKFLOW]: PR_WORKFLOW.replace("    branches", "  branches") },
+      `${WORKFLOW}: not a test script`,
+    ],
+    [
+      "a title in a one-line table row",
+      { [TEST]: PR_TEST.replace('"adds"', '"sums"') },
+      `${TEST}: ${UNSURE}: "["sums", 1, 2],"`,
+    ],
+    [
+      "a title given to it.each",
+      { [TEST]: PR_TEST.replace('"%s"', '"%s twice"') },
+      `${TEST}: ${UNSURE}: "])("%s twice", (_, a, sum) => {"`,
+    ],
+    [
+      "a number inside a string",
+      { [TEST]: PR_TEST.replace("case 1", "case 2") },
+      `${TEST}: ${UNSURE}: "const NAME = "case 2";"`,
+    ],
+    [
+      "a number in a trailing comment",
+      { [TEST]: PR_TEST.replace("seconds: 5", "seconds: 6") },
+      `${TEST}: ${UNSURE}: "const WAIT = 5; // seconds: 6"`,
+    ],
+    [
+      "a number inside a block comment",
+      { [TEST]: PR_TEST.replace("waits 20 s", "waits 30 s") },
+      `${TEST}: ${UNSURE}: "waits 20 s"`,
+    ],
+    [
+      "a number below a template literal",
+      { [TEST]: PR_TEST.replace("AFTER = 5", "AFTER = 6") },
+      `${TEST}: ${UNSURE}: "const AFTER = 5;"`,
+    ],
+    [
+      "a call in a test",
+      { [TEST]: PR_TEST.replace("toBe(sum)", "toEqual(sum)") },
+      `${TEST}: ${UNSURE}: "expect(add(a, a)).toEqual(sum);"`,
     ],
     [
       "a comment in a test",
       { [TEST]: `// why: the sum is exact\n${PR_TEST}` },
-      `${TEST}: a comment or test title changed: "// why: the sum is exact"`,
+      `${TEST}: ${UNSURE}: "// why: the sum is exact"`,
     ],
   ])("sends a fix that changes %s to the fix-check", (_, files, reason) => {
     const { check, commit } = repository();
@@ -134,12 +199,12 @@ describe("fix-kind.mjs", { timeout: 60_000 }, () => {
     git("add", ".");
     git("commit", "-qm", "merge");
 
-    expect(check()).toEqual({ status: 1, stdout: `fix-kind: ${SOURCE}: not a test file\n` });
+    expect(check()).toEqual({ status: 1, stdout: `fix-kind: ${SOURCE}: not a test script\n` });
   });
 
   it("sends any fix to the fix-check while a finding is open", () => {
     const { check, commit } = repository();
-    commit({ [TEST]: PR_TEST.replace("toBe(2)", "toEqual(2)") });
+    commit({ [TEST]: NUMBERS });
 
     expect(
       check([
