@@ -78,7 +78,7 @@ const ORCHESTRATOR = [
   prompt("10:40:00", "also rename the flag"),
   reply("10:41:00", "o4", OPUS, { output_tokens: 5_000 }),
   prompt("10:45:00", "Update on pull request #7: checks passed"),
-  clockLine("11:45:30", 10),
+  clockLine("11:45:30", 28),
   prompt("11:50:00", "<command-name>/deliver</command-name><command-args>#5</command-args>"),
   reply("11:51:00", "o5", OPUS, { output_tokens: 5_000 }),
   reported("11:52:00", "t2"),
@@ -421,8 +421,13 @@ function metrics(args: readonly string[], setup: Setup = {}) {
   if (setup.throughGh === true) fakeGh(dir, github);
   const sleepFile = join(dir, "sleep.json");
   if (setup.keptSleep !== undefined) writeFileSync(sleepFile, JSON.stringify(setup.keptSleep));
-  const log = (setup.log ?? SLEPT_AFTER_THE_WORK).join("\n");
-  writeFakeCommand(dir, "pmset", `#!/usr/bin/env node\nconsole.log(${JSON.stringify(log)});\n`);
+  // why: without a log the 30 minutes of sleep come from the two clock lines alone, on every
+  // platform. Windows has no pmset, and no fake of it either: the fake there is a copy of node
+  // under the command's name, and node refuses `-g` as an option of its own before any script runs.
+  const log = (setup.log ?? []).join("\n");
+  if (process.platform !== "win32") {
+    writeFakeCommand(dir, "pmset", `#!/usr/bin/env node\nconsole.log(${JSON.stringify(log)});\n`);
+  }
   const out = execFileSync(
     process.execPath,
     [
@@ -456,11 +461,6 @@ function ghCalls(dir: string): string[] {
 
 const logLine = (time: string, what: string): string =>
   `2026-10-10 ${time} +0000 ${what.padEnd(20)}\tdetail`;
-const SLEPT_AFTER_THE_WORK = [
-  logLine("09:00:00", "Assertions"),
-  logLine("11:00:00", "Sleep"),
-  logLine("11:30:00", "Wake"),
-];
 
 function tableLine(out: string, first: string): string {
   const found = out.split("\n").find((l) => l.startsWith(`| ${first} |`));
@@ -678,25 +678,32 @@ describe("delivery-metrics.mjs", () => {
     expect(ghCalls().slice(5)).toEqual(["pr view 7"]);
   });
 
-  it("takes out the sleep an earlier run recorded before the log's first line and the clock hook's lines from before the record, and keeps the record for the next run", () => {
-    const keptSleep = {
-      from: ms("10:16:00"),
-      to: ms("10:45:00"),
-      intervals: [[ms("10:16:00"), ms("10:19:00")]],
-    };
-    const log = [logLine("10:45:00", "Assertions"), ...SLEPT_AFTER_THE_WORK.slice(1)];
+  it.skipIf(process.platform === "win32")(
+    "takes out the sleep the pmset log lists, the sleep an earlier run recorded before the log's first line and the clock hook's lines from before the record, and keeps the record for the next run",
+    () => {
+      const keptSleep = {
+        from: ms("10:16:00"),
+        to: ms("10:45:00"),
+        intervals: [[ms("10:16:00"), ms("10:19:00")]],
+      };
+      const log = [
+        logLine("10:45:00", "Assertions"),
+        logLine("11:00:00", "Sleep"),
+        logLine("11:30:00", "Wake"),
+      ];
 
-    const { out, sleepFile } = metrics(["--prs", "7", "--json"], { log, keptSleep });
+      const { out, sleepFile } = metrics(["--prs", "7", "--json"], { log, keptSleep });
 
-    const { prs } = JSON.parse(out) as { prs: unknown[] };
-    expect(prs[0]).toMatchObject({ wallMin: 84, busyMin: 24.5, afterLastAgentMin: 7.5 });
-    expect(JSON.parse(readFileSync(sleepFile, "utf8"))).toEqual({
-      from: ms("10:16:00"),
-      to: ms("11:30:00"),
-      intervals: [
-        [ms("10:16:00"), ms("10:19:00")],
-        [ms("11:00:00"), ms("11:30:00")],
-      ],
-    });
-  });
+      const { prs } = JSON.parse(out) as { prs: unknown[] };
+      expect(prs[0]).toMatchObject({ wallMin: 84, busyMin: 24.5, afterLastAgentMin: 7.5 });
+      expect(JSON.parse(readFileSync(sleepFile, "utf8"))).toEqual({
+        from: ms("10:16:00"),
+        to: ms("11:30:00"),
+        intervals: [
+          [ms("10:16:00"), ms("10:19:00")],
+          [ms("11:00:00"), ms("11:30:00")],
+        ],
+      });
+    },
+  );
 });
