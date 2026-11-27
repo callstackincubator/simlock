@@ -408,6 +408,13 @@ console.log(JSON.stringify(out));
   );
 }
 
+// why: the fake-command environment preloads a file only `writeFakeCommand` makes, so a run
+// with no fake keeps the plain environment.
+function scriptEnv(dir: string, setup: Setup): NodeJS.ProcessEnv {
+  const faked = process.platform !== "win32" || setup.throughGh === true;
+  return faked ? { ...process.env, ...fakeCommandEnv(dir) } : process.env;
+}
+
 function metrics(args: readonly string[], setup: Setup = {}) {
   const dir = mkdtempSync(join(tmpdir(), "delivery-metrics-"));
   for (const [path, text] of Object.entries(setup.files ?? deliveryFiles())) {
@@ -439,7 +446,7 @@ function metrics(args: readonly string[], setup: Setup = {}) {
       "--transcripts",
       join(dir, "projects", "check*"),
     ],
-    { encoding: "utf8", env: { ...process.env, ...fakeCommandEnv(dir) } },
+    { encoding: "utf8", env: scriptEnv(dir, setup) },
   );
   return { out, sleepFile, ghCalls: () => ghCalls(dir) };
 }
