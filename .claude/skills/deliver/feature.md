@@ -32,7 +32,7 @@ and a `B` line (a missing number, a cycle) parks the feature.
   bottom to top, in temporary worktrees, and never rebases. It stops on
   the first conflict (`conflict <branch> <parent> <files>`): send that
   task's branch one `implementer` fix run with `fixes: stack: merge
-  origin/<parent>`, then a fix check on that PR, then the script again.
+  origin/<parent>`, then step 2 item 3's `fix-kind.mjs`, then the script again.
   PR body Status: `Gate: waiting for the stack`.
 - Deliver up to two runnable tasks at once, each in its own worktree. Start
   a stage for one as soon as the other's agent is running; never wait on one
@@ -45,12 +45,11 @@ and a `B` line (a missing number, a cycle) parks the feature.
 
 **Merging the stack.** When every task has joined the stack and nothing is
 in flight: first the feature's ADRs. Each ADR under its Decisions is
-_Accepted — not yet implemented_; send the top PR's branch one
-`implementer` fix run with `fixes: adr: <nnnn> to Accepted` per ADR (a
-status line and the index row, nothing else; rule 10), then the
-coordinator's mechanical fix-check: `node .agents/scripts/adr-flip-check.mjs
-<commit>` on each fix commit, `verified by: coordinator` only on exit 0,
-another fix run otherwise. Then run
+_Accepted — not yet implemented_ (rule 10): `node
+.agents/scripts/adr-flip.mjs <nnnn> ... --branch <the top PR's branch>`
+flips them in one commit, checks it and pushes it; that commit gets no
+fix-check. Exit 1: an `implementer` fix run with `fixes: adr: <nnnn> to
+Accepted`, then `adr-flip-check.mjs <commit>`. Then run
 `.agents/scripts/stack-sync.sh <top>` once more (another feature may have
 merged meanwhile), resolve a conflict as above, then the gate on the top
 PR: `merge-pr.sh <top>` gates every PR in the stack and merges them all,

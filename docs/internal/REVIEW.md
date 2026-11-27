@@ -109,6 +109,7 @@ fix-check. Count every invocation, including that fix-check. After the cap,
 any unresolved blocking finding or unchecked semantic fix parks the PR in
 draft with the ledger; a maintainer decides the next action. Pure mechanical
 edits may be verified by the coordinator without another lens invocation.
+One extension, once per PR: a fix-check that blocks on Fix lines alone, with no Spec needs, gets one more fix run and fix-check before the park.
 No note starts a round unless evidence establishes a blocking defect. Notes go out once, after the last check.
 
 Every reviewer reports `Assessment: complete` or `Assessment: incomplete`
@@ -130,16 +131,15 @@ entry per canonical finding: `id`, `role`, `class` (the `[class]` the lens
 gave, a rule like `testing 2` or at most 8 words), `outcome`, `path`,
 `round` (the check that raised it: `1`, `2` or `fix-check`), `fix` (the
 fix commit, once fixed) and `canonicalId` for a duplicate. Before the gate,
-post one PR comment headed `## Review ledger`: one line `Round <r>:
-<full commit>` per check in order, the output of `review-metrics.mjs --pr
-<M> --issue <N> --findings <file>`, then the findings file in a `json`
-code block. `node .agents/scripts/review-ledger.mjs <M> --issue <N>
---findings <file> --round <r>:<commit> [--round ...]` builds the comment in
-exactly this shape, posts it or updates the existing one, and then runs
-`pr-body-check.mjs <M>`; nobody writes the comment by hand. The round lines are what lets a check be frozen and replayed
-later (`replay-freeze.mjs`). The
-weekly `recurring-findings` routine reads these comments. Record escaped
-defects after merge. Do not call raised-minus-fixed a false-positive rate.
+`node .agents/scripts/review-ledger.mjs <M> --issue <N> --findings <file>
+--round <r>:<commit> [--round ...]` posts or updates the PR comment headed
+`## Review ledger` (one `Round` line per check in order, a fix-check's with
+its trigger; the output of `review-metrics.mjs`; the findings file) and
+runs `pr-body-check.mjs <M>`; nobody writes the comment by hand. The round
+lines are what lets a check be frozen and replayed later
+(`replay-freeze.mjs`). The weekly `recurring-findings` routine reads these
+comments. Record escaped defects after merge. Do not call
+raised-minus-fixed a false-positive rate.
 
 How a cheaper reviewer model is evaluated and promoted, the replay harness
 and the sources of this design: [REVIEW-EVALUATION.md](REVIEW-EVALUATION.md).

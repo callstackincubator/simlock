@@ -15,8 +15,10 @@
 //     The ledger's json block has no finding whose `outcome` is `open`, and the `## Review`
 //     section has the line `Assessment: complete` (rule 15). The ledger's `Round <r>: <sha>`
 //     lines are 40-hex SHAs with at most one round 1 and one round 2, round 1 first, each an
-//     ancestor of the head (a warning when this clone lacks a SHA); at most one comment is
-//     headed `## Review notes` (REVIEW.md, the cap);
+//     ancestor of the head (a warning when this clone lacks a SHA), a fix-check's line ending
+//     with its trigger or nothing; at most one comment is headed `## Review notes` (REVIEW.md,
+//     the cap). More than three Round lines is a warning that counts them by round and
+//     trigger, and so is an `extension:` line over 1;
 //   - `## Assumptions` holds lines other than `none` or `- Assumption: <q> — <choice>` (coding
 //     rule 2);
 //   - the prose runs over 200 words: everything outside code blocks, checklist lines and the
@@ -218,6 +220,17 @@ function checkLedger(text) {
   const rounds = ledgerRounds(text);
   checkRoundOrder(rounds.map((r) => r.round).filter((r) => r !== "fix-check"));
   if (diffHead !== null) for (const r of rounds) checkAncestry(r);
+  if (rounds.length > 3) {
+    const names = rounds.map((r) => (r.round === "fix-check" ? (r.trigger ?? r.round) : r.round));
+    const counted = [...new Set(names)].map((n) => `${n} ${names.filter((x) => x === n).length}`);
+    warnings.push(`the ledger has ${rounds.length} checks: ${counted.join(", ")}`);
+  }
+  const extension = Number(/^extension: (\d+)\s*$/m.exec(text)?.[1] ?? 0);
+  if (extension > 1) {
+    warnings.push(
+      `the ledger has ${extension} review fix-checks past the cap; one is automatic, a maintainer allows the rest (REVIEW.md, the cap)`,
+    );
+  }
 }
 
 function ledgerFindings(text) {
@@ -235,12 +248,17 @@ function ledgerFindings(text) {
 function ledgerRounds(text) {
   const rounds = [];
   for (const l of text.split("\n").filter((l) => l.startsWith("Round "))) {
-    const round = /^Round (1|2|fix-check): ([0-9a-f]{40})\s*$/.exec(l);
+    const round =
+      /^Round (?:(1|2): ([0-9a-f]{40})|(fix-check): ([0-9a-f]{40})(?: (ci|merge|review|hardware))?)\s*$/.exec(
+        l,
+      );
     if (round === null) {
       failures.push(
-        `a ledger line is not "Round <1|2|fix-check>: <full sha>": "${l.slice(0, 60)}"`,
+        `a ledger line is not "Round <1|2|fix-check>: <full sha>", a fix-check's with its trigger: "${l.slice(0, 60)}"`,
       );
-    } else rounds.push({ round: round[1], sha: round[2] });
+    } else {
+      rounds.push({ round: round[1] ?? round[3], sha: round[2] ?? round[4], trigger: round[5] });
+    }
   }
   return rounds;
 }
