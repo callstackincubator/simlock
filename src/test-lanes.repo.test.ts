@@ -212,21 +212,100 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
   });
 });
 
+// why: one Windows runner spends 11 to 17 minutes in the unit tests, and every other job ends
+// within 5.
+const WINDOWS_SHARDS_AT_LEAST = 3;
+
 describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
-  it("runs `pnpm run test:unit` as `Unit tests (Windows)` on windows-2025 under bash with a 30 minute limit, `quality` needs it, and text files check out with LF", () => {
+  it("runs `pnpm run test:unit` as `Unit tests (Windows, <shard>/<shards>)` over a matrix of at least three shards on windows-2025 under bash with a 30 minute limit, `quality` needs it, and text files check out with LF", () => {
     const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
     const attributes = readFileSync(join(REPO_ROOT, ".gitattributes"), "utf8");
     const jobs = ciJobs(ci);
     const windows = jobs.get("windows-unit") ?? "";
+    const shards = /\n {8}shard: \[([^\]]*)\]/.exec(windows)?.[1]?.split(",") ?? [];
 
     expect(windows, "a job `windows-unit`").not.toBe("");
-    expect(windows).toMatch(/\n {4}name: Unit tests \(Windows\)\n/);
+    expect(shards.length, "shards in the Windows job's matrix").toBeGreaterThanOrEqual(
+      WINDOWS_SHARDS_AT_LEAST,
+    );
+    expect(windows).toContain(
+      `\n    name: Unit tests (Windows, \${{ matrix.shard }}/${shards.length})\n`,
+    );
     expect(windows).toContain("runs-on: windows-2025");
     expect(windows).toMatch(/\n {6}shell: bash\n|\n {4}defaults:\n {6}run:\n {8}shell: bash\n/);
     expect(windows).toContain("timeout-minutes: 30");
-    expect(windows).toMatch(/run: pnpm run test:unit\n/);
+    expect(windows, "one red shard does not cancel the others").toContain("fail-fast: false");
+    expect(windows, "the shard index comes from the matrix").toMatch(
+      /\n {10}SHARD: \$\{\{ matrix\.shard \}\}/,
+    );
+    expect(windows, "index from the matrix, count from its length").toContain(
+      `run: pnpm run test:unit --shard="$SHARD/${shards.length}"\n`,
+    );
     expect(jobs.get("quality")).toMatch(/needs:\s*\[[^\]]*\bwindows-unit\b/);
     expect(attributes.split("\n")).toContain("* text=auto eol=lf");
+  });
+
+  it("runs on every push to main, and on a pull request unless it changes no source, test, script or root build file; a Changes job that failed runs it", () => {
+    const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
+    const jobs = ciJobs(ci);
+    const windows = jobs.get("windows-unit") ?? "";
+    const changes = jobs.get("changes") ?? "";
+    const body = /\n {8}run: \|\n((?: {10}[^\n]*\n?)+)/.exec(changes)?.[1] ?? "";
+    expect(body, "the Changes job's run script").not.toBe("");
+    // why: the script reads the changed files from git and writes its answer to a file; here
+    // git prints the list under test and the file is printed when the script ends.
+    const script = [
+      `git() { printf '%s\\n' "$CHANGED"; }`,
+      `GITHUB_OUTPUT=$(mktemp)`,
+      `trap 'cat "$GITHUB_OUTPUT"; rm -f "$GITHUB_OUTPUT"' EXIT`,
+      body.replace(/^ {10}/gm, ""),
+    ].join("\n");
+    const answer = (event: string, changed: readonly string[]) => {
+      const run = spawnSync("bash", ["-c", script], {
+        encoding: "utf8",
+        env: {
+          PATH: process.env["PATH"] ?? "",
+          GITHUB_EVENT_NAME: event,
+          CHANGED: changed.join("\n"),
+        },
+      });
+      return /^windows=(.*)$/m.exec(run.stdout)?.[1];
+    };
+
+    expect(windows).toMatch(/\n {4}needs: changes\n/);
+    expect(windows).toMatch(
+      /\n {4}if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.windows != 'false' \}\}\n/,
+    );
+    expect(changes).toMatch(/\n {6}windows: \$\{\{ steps\.filter\.outputs\.windows \}\}\n/);
+    expect(answer("push", ["docs/internal/DELIVERY.md"]), "a push to main").toBe("true");
+    for (const skipped of [
+      ["docs/internal/adr/0092-device-tags.md", "docs/internal/adr/README.md"],
+      ["website/src/content/docs/docs/reference/cli.mdx", "README.md"],
+      ["e2e/console/leases.spec.ts", "e2e/helpers/setup.ts", "playwright.config.ts"],
+      [".claude/agents/reviewer.md", ".agents/briefs/build.md", "AGENTS.md"],
+      ["vendor/screen-capture/Package.swift", ".github/workflows/release.yml"],
+    ]) {
+      expect(answer("pull_request", skipped), skipped.join(" ")).toBe("false");
+    }
+    for (const run of [
+      "src/leasing/create-leasing.ts",
+      "src/leasing/create-leasing.test.ts",
+      "ui/src/model/inbox.ts",
+      "packages/e2e/src/index.ts",
+      "scripts/slow-e2e.sh",
+      ".agents/scripts/merge-pr.sh",
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "turbo.json",
+      "tsconfig.build.json",
+      "vitest.config.ts",
+      "lefthook.yml",
+      ".gitattributes",
+      ".github/workflows/ci.yml",
+    ]) {
+      expect(answer("pull_request", ["docs/internal/DELIVERY.md", run]), run).toBe("true");
+    }
   });
 });
 
