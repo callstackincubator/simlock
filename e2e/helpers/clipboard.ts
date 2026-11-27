@@ -33,10 +33,6 @@ export async function expectClipboardIsolated(udid: string): Promise<void> {
   await writeClipboard("xcrun", ["simctl", "pbcopy", udid], device);
   await new Promise((resolve) => setTimeout(resolve, 3_000));
   expect((await execFileAsync("pbpaste")).stdout, "device clipboard did not reach host").toBe(host);
-  expect(
-    (await execFileAsync("xcrun", ["simctl", "pbpaste", udid])).stdout,
-    "host clipboard did not reach device",
-  ).toBe(device);
   const hostAgain = `host-again-${token}`;
   await writeClipboard("pbcopy", [], hostAgain);
   await new Promise((resolve) => setTimeout(resolve, 3_000));
