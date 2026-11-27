@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,10 @@ function bash(state: string, cwd: string, command: string, agent?: string): stri
     tool_name: "Bash",
     tool_input: { command },
   });
+}
+
+function record(type: "assistant" | "user", content: unknown): string {
+  return `${JSON.stringify({ type, message: { role: type, content } })}\n`;
 }
 
 describe("manual-hook.mjs", () => {
@@ -124,6 +128,77 @@ describe("manual-hook.mjs", () => {
     expect(`${first}\n${second}`.match(/role \d+ \|/g)).toHaveLength(400);
     expect(third).toBe("");
   });
+
+  it("sends no manual to the reviewer or the hardware verifier, and still sends a lens its manuals", () => {
+    const state = mkdtempSync(join(tmpdir(), "manual-hook-"));
+    const repo = checkout("main");
+    const as = (type: string): string =>
+      call(state, {
+        session_id: "s1",
+        agent_id: `agent-${type}`,
+        agent_type: type,
+        cwd: repo,
+        tool_name: "Bash",
+        tool_input: { command: "cat src/a/x.ts" },
+      });
+
+    expect(as("code-reviewer")).toContain("# A of main");
+    expect(as("reviewer")).toBe("");
+    expect(as("hardware-verifier")).toBe("");
+  });
+
+  it.each([
+    [
+      "the Skill tool's call",
+      record("assistant", [
+        { type: "tool_use", id: "t2", name: "Skill", input: { skill: "deliver" } },
+      ]),
+    ],
+    [
+      "the /deliver command",
+      record(
+        "user",
+        "<command-message>deliver</command-message>\n<command-name>/deliver</command-name>",
+      ),
+    ],
+  ])(
+    "sends a main session no manual once its transcript holds %s, and its sub-agents still get theirs",
+    (_form, started) => {
+      const state = mkdtempSync(join(tmpdir(), "manual-hook-"));
+      const repo = checkout("main");
+      const transcript = join(state, "transcript.jsonl");
+      writeFileSync(
+        transcript,
+        record("assistant", [
+          { type: "tool_use", id: "t1", name: "Skill", input: { skill: "spec-session" } },
+        ]) +
+          record("user", [
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: "<command-name>/deliver</command-name>",
+            },
+          ]),
+      );
+      const reads = (command: string, agent?: object): string =>
+        call(state, {
+          session_id: "s1",
+          transcript_path: transcript,
+          cwd: repo,
+          tool_name: "Bash",
+          tool_input: { command },
+          ...agent,
+        });
+
+      expect(reads("cat src/a/x.ts")).toContain("# A of main");
+      appendFileSync(transcript, started);
+      expect(reads("cat src/a/b/y.ts")).toBe("");
+      expect(reads("cat ui/src/app.tsx")).toBe("");
+      expect(
+        reads("cat src/a/b/y.ts", { agent_id: "agent-1", agent_type: "implementer" }),
+      ).toContain("# B of main");
+    },
+  );
 
   it("says nothing for a folder with no manual, a path outside src/ and ui/, or no session", () => {
     const state = mkdtempSync(join(tmpdir(), "manual-hook-"));

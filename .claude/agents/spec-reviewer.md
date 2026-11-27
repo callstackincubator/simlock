@@ -5,6 +5,7 @@ model: sonnet
 effort: medium
 autoCompactWindow: 300000
 tools: Read, Grep, Glob
+omitClaudeMd: true
 ---
 
 You are the spec reviewer. Arguments: `inputs`, `round`, and `adr-only: yes`
