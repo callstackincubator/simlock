@@ -126,7 +126,8 @@ export interface WindowsHostLoadProbeOptions {
  * itself (`os.freemem()` is what Windows counts as available), but not the page file, so swap comes
  * from one PowerShell CIM query. That costs about a second, so its answer is kept for
  * `PAGEFILE_REFRESH_MS`: swap moves slowly, and the sampler reads every 15 s. A query that fails
- * leaves memory out, as an unreadable swap line does on macOS.
+ * leaves memory out, as an unreadable swap line does on macOS; so does PowerShell's first start
+ * on a loaded host when it runs past `PAGEFILE_TIMEOUT_MS`, and the next reading asks again.
  */
 export class WindowsHostLoadProbe implements HostLoadProbe {
   #pageFile: { readonly usedBytes: number; readonly readAt: number } | undefined;

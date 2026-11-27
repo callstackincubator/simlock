@@ -121,8 +121,9 @@ the status is stale.
 | [0084](0084-a-worker-may-serve-a-platforms-enrolled-phones-only.md) | A worker may serve a platform's enrolled phones only | Accepted; narrows 0022 and 0009 §4 |
 | [0085](0085-an-ios-simulator-takes-keys-on-every-runtime-and-the-app-switcher-and-lock.md) | An iOS simulator takes keys on every runtime, and the app switcher and Lock | Accepted; narrows 0049 §4 |
 | [0086](0086-on-windows-the-daemon-service-is-a-logon-task-that-runs-a-simlock-supervisor.md) | On Windows the daemon service is a logon task that runs a Simlock supervisor | Accepted; narrows 0041 §1, §3, §4, §5 and §8 |
-| [0087](0087-the-unit-tests-run-on-windows-in-ci-and-a-list-of-files-still-failing-there-only-shrinks.md) | The unit tests run on Windows in CI, and a list of files still failing there only shrinks | Accepted; narrows testing rule 5 |
+| [0087](0087-the-unit-tests-run-on-windows-in-ci-and-a-list-of-files-still-failing-there-only-shrinks.md) | The unit tests run on Windows in CI, and a list of files still failing there only shrinks | Accepted; narrows testing rule 5; §1 narrowed by 0096 |
 | [0088](0088-a-macos-worker-checks-fseventsd-when-doctor-runs.md) | A macOS worker checks fseventsd's memory when doctor runs, and an optional module may be on by default on a macOS worker | Accepted; narrows 0030 §2, §3 and §7, and 0046 §1 |
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
 | [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted; narrows 0061 §1 and §2 and 0076 §1 and §2 |
 | [0091](0091-an-operator-names-a-workers-tags-and-a-lease-may-require-them.md) | An operator names a worker's tags, and a lease may require them | Accepted; narrows 0026 §1 and 0030 §5 |
+| [0096](0096-the-windows-unit-tests-run-in-three-shards-and-only-when-a-change-can-differ-on-windows.md) | The Windows unit tests run in three shards, and on a pull request only when its change can give another result on Windows | Accepted; narrows 0087 §1 |
