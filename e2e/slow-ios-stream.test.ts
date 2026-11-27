@@ -341,7 +341,8 @@ describe.skipIf(process.platform !== "darwin")(
               dark ? "dark" : "light",
             ]);
           };
-          const faultsSince = async (since: Date) => (await rendererFaults(since)).length;
+          const renderer = await rendererPid(udid);
+          const faultsSince = async (since: Date) => (await rendererFaults(renderer, since)).length;
 
           const killed = start();
           await killed.firstFrame;
@@ -371,7 +372,7 @@ describe.skipIf(process.platform !== "darwin")(
             await new Promise((resolve) => setTimeout(resolve, 1_000));
           }
           expect(
-            await rendererFaults(settled),
+            await rendererFaults(renderer, settled),
             "the renderer kept faulting for a killed program's frame callbacks after the next program started",
           ).toEqual([]);
           next.child.stdin.end();
@@ -405,7 +406,7 @@ describe.skipIf(process.platform !== "darwin")(
             await new Promise((resolve) => setTimeout(resolve, 1_000));
           }
           expect(
-            await rendererFaults(orphanEnd),
+            await rendererFaults(renderer, orphanEnd),
             "the renderer faulted for the frame callbacks of a program whose daemon died",
           ).toEqual([]);
         } finally {
@@ -496,9 +497,31 @@ function logTime(at: Date): string {
   return `${String(at.getFullYear())}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
 }
 
-// why: the simulator's renderer runs on the host, and logs one `Invalid connection UUID specified`
-// fault per rendered frame for each frame callback nobody unregistered.
-async function rendererFaults(since: Date): Promise<string[]> {
+// why: every booted simulator has its own SimRenderServer on the host, with no UDID in its
+// arguments or log lines; it starts in the same second as the simulator's launchd_sim (which names
+// the UDID) and just before it, so it is the highest SimRenderServer pid below that launchd_sim's.
+async function rendererPid(udid: string): Promise<number> {
+  const listed = await execFileAsync("ps", ["-axww", "-o", "pid=,command="]);
+  const rows = listed.stdout.split("\n").map((line) => {
+    const [pid, ...command] = line.trim().split(/\s+/);
+    return { pid: Number(pid), command: command.join(" ") };
+  });
+  const launchd = rows.find((r) => r.command.includes("launchd_sim") && r.command.includes(udid));
+  expect(launchd, `no launchd_sim running for simulator ${udid}`).toBeDefined();
+  const renderers = rows
+    .filter((r) => r.command.includes("SimRenderServer.xpc") && r.pid < (launchd?.pid ?? 0))
+    .map((r) => r.pid);
+  expect(
+    renderers.length,
+    `no SimRenderServer started before simulator ${udid}'s launchd_sim`,
+  ).toBeGreaterThan(0);
+  return Math.max(...renderers);
+}
+
+// why: the simulator's renderer logs one `Invalid connection UUID specified` fault per rendered
+// frame for each frame callback nobody unregistered; only the leased simulator's renderer counts,
+// because another booted simulator on the host faults on its own.
+async function rendererFaults(renderer: number, since: Date): Promise<string[]> {
   const shown = await execFileAsync("log", [
     "show",
     "--style",
@@ -506,7 +529,7 @@ async function rendererFaults(since: Date): Promise<string[]> {
     "--start",
     logTime(since),
     "--predicate",
-    'process == "SimRenderServer" AND eventMessage CONTAINS "Invalid connection UUID specified"',
+    `process == "SimRenderServer" AND processID == ${String(renderer)} AND eventMessage CONTAINS "Invalid connection UUID specified"`,
   ]);
   return shown.stdout
     .split("\n")
