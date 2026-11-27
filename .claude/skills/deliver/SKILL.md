@@ -210,8 +210,8 @@ they name; never build again or restart review at round 1.
      base-sha the previous check used>`, so the inputs script can map the
      previous commit across the rebase.
    - `Rerun: none` with unresolved nonmechanical findings or unchecked fixes
-     at the cap: park; but once per PR, Fix lines alone with `Spec needs:
-     none` first get one more fix run and `fix-check` (the extension).
+     at the cap: park; but once per PR, when every open finding has a Fix
+     line and `Spec needs` is none, first one more fix run and `fix-check`.
      Mechanical changes get a coordinator diff check.
    - Commits after reviews passed (a CI fix, a conflict resolution, a base
      merge): `node .agents/scripts/fix-kind.mjs <the last check's Commit>

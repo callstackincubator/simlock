@@ -109,7 +109,7 @@ fix-check. Count every invocation, including that fix-check. After the cap,
 any unresolved blocking finding or unchecked semantic fix parks the PR in
 draft with the ledger; a maintainer decides the next action. Pure mechanical
 edits may be verified by the coordinator without another lens invocation.
-One extension, once per PR: a fix-check that blocks on Fix lines alone, with no Spec needs, gets one more fix run and fix-check before the park.
+One extension, once per PR: at the cap, when every open finding has a Fix line and no Spec needs is open, one more fix run and fix-check come before the park.
 No note starts a round unless evidence establishes a blocking defect. Notes go out once, after the last check.
 
 Every reviewer reports `Assessment: complete` or `Assessment: incomplete`
