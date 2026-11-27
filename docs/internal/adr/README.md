@@ -75,7 +75,7 @@ the status is stale.
 | [0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md) | One worker per user, and the folder says what a daemon is | Accepted; §1's "no new lock" narrowed by 0059 |
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
-| [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
+| [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented; §3 extended by 0095 |
 | [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted; §3, §8 and an alternative narrowed by 0051; §4 narrowed by 0050 (proposed); §1, §4, §5 and §8 narrowed by 0062; §2 and §3 narrowed by 0069 |
 | [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented; narrowed by 0046 |
 | [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented; its stream-route example stale since 0045 |
@@ -126,3 +126,4 @@ the status is stale.
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
 | [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted; narrows 0061 §1 and §2 and 0076 §1 and §2 |
 | [0091](0091-an-operator-names-a-workers-tags-and-a-lease-may-require-them.md) | An operator names a worker's tags, and a lease may require them | Accepted; narrows 0026 §1 and 0030 §5 |
+| [0095](0095-the-console-offers-phone-actions-on-a-worker-and-a-worker-lists-the-phones-it-could-enrol.md) | The console offers phone actions on a worker, and a worker lists the phones it could enrol | Accepted — not yet implemented; extends 0037 §3 |
