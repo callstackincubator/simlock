@@ -39,11 +39,12 @@ Issue `<n>` is built on branch `<kind>/<n>`.
 2. `triage-bug` (or `deliver` on a `bug:new` issue) reproduces it as a
    failing test on `bug/<n>-repro` and posts one report comment (delivery
    rule 8). If it cannot reproduce, it moves the issue to `bug:needs-info`.
-3. **Fast track** (delivery rule 17), only under `deliver`: the report
-   ends with five yes/no facts (a defect, the fix was tried, nothing
-   public added or broken, no ADR or rule changed, one fix). All `yes`:
-   `fast-track.mjs` sets `bug:ready` and `fast-track`, and the same run
-   goes on to step 5. `deliver #<n> no-fast-track` skips this.
+3. **Fast track** (delivery rule 17): the report ends with five yes/no
+   facts (a defect, the fix was tried, nothing public added or broken, no
+   ADR or rule changed, one fix). All `yes`: `fast-track.mjs` sets
+   `bug:ready` and `fast-track`. Under `deliver` the same run goes on to
+   step 5; under `triage-bug` the hourly sweep takes it.
+   `deliver #<n> no-fast-track` skips this.
 4. Otherwise the label stays `bug:new` and you read the report. Agree: add
    `bug:ready`, which also accepts the shape the report proposes for a
    gap. Disagree: reply and run `triage-bug` again; the new report
