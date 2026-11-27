@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// PreToolUse hook (Bash, Agent): refuses three kinds of tool call the delivery rules forbid.
+// PreToolUse hook (Bash, Agent): refuses the tool calls the delivery rules forbid, repairs the
+// ones whose fix is known, and adds to an agent's prompt the text it would otherwise open.
 //
 //   check      a sub-agent runs a check from toolchain.md's "Checks agents never run" (`pnpm
 //              check`, `pnpm fallow`, ...) or a tool behind one, from any path. The commit hook,
@@ -9,13 +10,12 @@
 //              last cycle, whose code a later cycle wires in Fallow calls dead code).
 //   isolation  an `implementer`, `reviewer` or `hardware-verifier` is started with `isolation`.
 //              Every stage of a task works in the task's one worktree, one after another.
-//   waiting    a sub-agent runs a test runner without `timeout: 600000` on the Bash call (the
-//              default 120 s moves a two-minute run to the background), starts a background job
-//              (`run_in_background`, a trailing `&`), polls in a loop that sleeps, or runs a bare
-//              `cat > file` with no input (it reads stdin until the tool times out). Each of
-//              these turned into a stall: a backgrounded job holds the agent's report until the
-//              job ends or hits its 30-minute cap. The slow lane is exempt: `slow-e2e.sh` runs
-//              detached by design and its agents wait on `<log>.exit` (delivery rule 16).
+//   waiting    a sub-agent starts a background job (`run_in_background`, a trailing `&`), polls
+//              in a loop that sleeps, or runs a bare `cat > file` with no input (it reads stdin
+//              until the tool times out). Each of these turned into a stall: a backgrounded job
+//              holds the agent's report until the job ends or hits its 30-minute cap. The slow
+//              lane is exempt: `slow-e2e.sh` runs detached by design and its agents wait on
+//              `<log>.exit` (delivery rule 16).
 //
 //   prompt     a stage or lens agent (`implementer`, `reviewer`, `hardware-verifier`,
 //              `spec-reviewer`, `code-reviewer`, `claims-reviewer`) is started without the ledger
@@ -23,9 +23,12 @@
 //              `implementer` without a `mode:` line; a stage agent with a `model`; a `code-reviewer`
 //              off Opus on a diff that touches a strict area (REVIEW.md, "Routing"), outside a
 //              replay; or a sub-agent starts a helper that is not `run_in_background: false`.
-//   git        a sub-agent runs `git stash` (but `list` or `show`), `git rebase` (or `pull
-//              --rebase`), or a push that
-//              rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force`, `--delete`).
+//   git        any session pushes to `origin`'s `main`: by name, as `<src>:main`, with `--all`,
+//              or from a branch that tracks `origin/main` while `push.default` is `upstream`
+//              (git then sends `git push`, and `git push origin <branch>`, to `main`). A
+//              sub-agent runs `git stash` (but `list` or `show`), `git rebase` (or `pull
+//              --rebase`), or a push that rewrites or deletes a remote branch (`+<ref>`,
+//              `:<ref>`, `--force`, `--delete`).
 //   gh         a sub-agent opens a PR without `--draft` (or a REST create without
 //              `draft=true`), opens one from a `-repro` branch, runs `gh pr ready`, or adds
 //              `bug:ready`, `task:ready`, `refactor:ready` or `feature:planned`, or removes
@@ -41,11 +44,19 @@
 //              an agent other than `hardware-verifier` and `implementer` runs `slow-e2e.sh`
 //              for anything but `status` (delivery rule 16).
 //
+//   repair     not a refusal: the guard makes the one known fix, returns the call as
+//              `updatedInput` and says so in `additionalContext`. A sub-agent's test run gets
+//              `timeout: 600000` (the default 120 s moves a two-minute run to the background);
+//              its `tsc --noEmit` on a project `pnpm typecheck` compiles becomes `pnpm typecheck`.
+//
 //   inject     not a refusal: the guard appends to the prompt the text the agent would otherwise
-//              open or its caller paste: an `implementer`'s mode brief under `brief:`, a
-//              `reviewer`'s `docs/internal/REVIEW.md` under `protocol:` (both from this checkout),
-//              and a lens's brief from `<inputs>/briefs/`, after `review-later-round.md` when the
-//              round is not 1. A prompt that already carries the text is left alone.
+//              open or its caller paste: an `implementer`'s mode brief under `brief:`; a
+//              `reviewer`'s protocol under `protocol:`, from `<inputs>/review-protocol.md` when
+//              the prompt names `inputs:` (a replay) and this checkout's
+//              `docs/internal/REVIEW.md` otherwise; a lens's brief from `<inputs>/briefs/`, after
+//              `review-later-round.md` when the round is not 1; and the rule-file sections a
+//              role opens on almost every run (`RULE_TEXT`), read from the files at run time.
+//              A prompt that already carries the text is left alone.
 //
 // A refusal exits 2 with the reason on stderr, which the agent reads.
 import { execFileSync } from "node:child_process";
@@ -97,6 +108,26 @@ const SLOW_LANE_SCRIPTS = new Set([
   "test:e2e:physical-manual",
 ]);
 const GIT_VALUE_FLAGS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
+const PUSH_VALUE_FLAGS = new Set(["--repo", "--receive-pack", "--exec", "-o", "--push-option"]);
+// why: the projects `pnpm typecheck` compiles (package.json); any other is not its to check.
+const TYPECHECK_PROJECTS = new Set([
+  ".",
+  "tsconfig.json",
+  "ui",
+  "ui/tsconfig.json",
+  "packages/e2e",
+  "packages/e2e/tsconfig.json",
+]);
+// why: a candidate `tsc` run in the blanked command: launcher, program, plain arguments, then
+// the command's end or a redirect.
+const TSC_RUN =
+  /(?<![\w./-])(?:(?:pnpm|npx)(?:\s+(?:exec|-[\w-]+))*\s+)?[\w./-]*\btsc(?![\w./-])(?:[ \t]+[\w./=-]+(?![\w./=-]|[<>]))*(?=[ \t]*(?:$|[\n;&|)`]|\d*[<>]))/g;
+const TIMEOUT_NOTE =
+  "The tool guard set `timeout: 600000` on this Bash call: a test run under the default 120 s " +
+  "moves to the background.";
+const TYPECHECK_NOTE =
+  "The tool guard ran `pnpm typecheck` in place of this call's `tsc --noEmit`: it is the type " +
+  'check agents run (toolchain.md, "Tests agents run").';
 const GH_API_VALUE_FLAGS = new Set([
   "-X",
   "--method",
@@ -173,8 +204,23 @@ const PROMPT_TEXT = {
   implementer: briefText,
   reviewer: protocolText,
   "spec-reviewer": (prompt) => lensText(prompt, "review-spec.md"),
-  "code-reviewer": (prompt) => lensText(prompt, "review-code.md"),
+  "code-reviewer": (prompt) =>
+    lensText(prompt, "review-code.md") + ruleText(prompt, "code-reviewer"),
   "claims-reviewer": (prompt) => lensText(prompt, "review-claims.md"),
+  "hardware-verifier": (prompt) => ruleText(prompt, "hardware-verifier"),
+  "bug-triager": (prompt) => ruleText(prompt, "bug-triager"),
+};
+// why: the parts of the rule files a role opened on almost every run (transcripts 2026-11-06 to
+// 27): a `##` section by its heading, a numbered rule by its number.
+const RULE_TEXT = {
+  "code-reviewer": [["toolchain.md", "Tests agents run"]],
+  "hardware-verifier": [["toolchain.md", "Slow lane"]],
+  "bug-triager": [
+    ["toolchain.md", "Tests agents run"],
+    ["testing.md", 10],
+    ["delivery.md", 8],
+    ["delivery.md", 17],
+  ],
 };
 
 function agentRules() {
@@ -183,13 +229,12 @@ function agentRules() {
   if (ctx.type === "code-reviewer") strictAreaCheck(ctx.prompt);
   const text = PROMPT_TEXT[ctx.type]?.(ctx.prompt) ?? "";
   if (text === "") return;
+  answer({ updatedInput: { ...args, prompt: `${ctx.prompt.trimEnd()}\n${text}` } });
+}
+
+function answer(output) {
   process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        updatedInput: { ...args, prompt: `${ctx.prompt.trimEnd()}\n${text}` },
-      },
-    }),
+    JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...output } }),
   );
 }
 
@@ -214,30 +259,76 @@ function briefText(prompt) {
   return carries(prompt, brief) ? "" : `brief:\n${brief}`;
 }
 
+// why: a prompt that names `inputs:` (a replay) is judged by the pinned base's protocol; a live
+// reviewer builds its inputs after this hook ran, so it gets this checkout's.
 function protocolText(prompt) {
-  const protocol = fs.readFileSync(path.join(ROOT, "docs", "internal", "REVIEW.md"), "utf8");
+  const protocol =
+    inputsFile(prompt, "review-protocol.md") ??
+    fs.readFileSync(path.join(ROOT, "docs", "internal", "REVIEW.md"), "utf8");
   return carries(prompt, protocol) ? "" : `protocol:\n${protocol}`;
+}
+
+// why: null when the prompt names no `inputs:` directory, or the guard cannot read the file.
+function inputsFile(prompt, ...name) {
+  const dir = /^inputs:\s*[`'"]?([^`'"\s]+)/m.exec(prompt)?.[1];
+  if (dir === undefined) return null;
+  try {
+    return fs.readFileSync(path.resolve(cwd, dir, ...name), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 // why: a lens is judged by the pinned base's briefs, which the inputs directory holds; a
 // directory the guard cannot read leaves the prompt alone, and the lens reads the files itself.
 function lensText(prompt, name) {
-  const dir = /^inputs:\s*[`'"]?([^`'"\s]+)/m.exec(prompt)?.[1];
-  if (dir === undefined) return "";
   const round =
     /^round:\s*`?([\w-]+)/m.exec(prompt)?.[1] ?? /\bround=(\S+)/.exec(firstLine(prompt))?.[1];
   const names = round === "1" ? [name] : ["review-later-round.md", name];
   let text = "";
   for (const n of names) {
-    let brief;
-    try {
-      brief = fs.readFileSync(path.resolve(cwd, dir, "briefs", n), "utf8");
-    } catch {
-      return "";
-    }
+    const brief = inputsFile(prompt, "briefs", n);
+    if (brief === null) return "";
     if (!carries(prompt, brief)) text += `=== briefs/${n} ===\n${brief}\n`;
   }
   return text;
+}
+
+// why: a lens reads the pinned base's rule files (`<inputs>/rules/`), every other role this
+// checkout's; a file or a part the guard cannot find adds nothing, and the agent opens the file.
+function ruleText(prompt, role) {
+  let text = "";
+  for (const [file, part] of RULE_TEXT[role]) {
+    const rules = LENSES.has(role)
+      ? inputsFile(prompt, "rules", file)
+      : readOrNull(path.join(ROOT, "docs", "internal", "agent-rules", file));
+    const found = rules === null ? "" : rulePart(rules, part);
+    if (found === "" || carries(prompt, found)) continue;
+    const label = typeof part === "number" ? `rule ${part}` : `"${part}"`;
+    text += `=== ${file}, ${label}, in full ===\n${found}\n`;
+  }
+  return text;
+}
+
+function rulePart(rules, part) {
+  const lines = rules.split("\n");
+  const numbered = typeof part === "number";
+  const from = lines.findIndex((l) => (numbered ? l.startsWith(`${part}. `) : l === `## ${part}`));
+  if (from === -1) return "";
+  const ends = (l) => l.startsWith("## ") || (numbered && l.startsWith(`${part + 1}. `));
+  const length = lines.slice(from + 1).findIndex(ends);
+  return lines
+    .slice(from, length === -1 ? undefined : from + 1 + length)
+    .join("\n")
+    .trim();
+}
+
+function readOrNull(file) {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
 }
 
 function strictAreaCheck(prompt) {
@@ -257,13 +348,7 @@ function strictAreaCheck(prompt) {
 
 // why: an `inputs:` directory the guard cannot read leaves the call alone.
 function inputsPatch(prompt) {
-  const dir = /^inputs:\s*[`'"]?([^`'"\s]+)/m.exec(prompt)?.[1];
-  if (dir === undefined) return "";
-  try {
-    return fs.readFileSync(path.resolve(cwd, dir, "diff.patch"), "utf8");
-  } catch {
-    return "";
-  }
+  return inputsFile(prompt, "diff.patch") ?? "";
 }
 
 function commandRules(raw) {
@@ -284,7 +369,7 @@ function changesDirectory(state, words, dynamic) {
 function commandStep(state, cmd, words, dynamic) {
   const name = path.basename(words[0]);
   if (name === "cat" && cmd.stdin !== null) trackWrites(state, cmd);
-  if (name === "git" && subAgent) gitRules(words);
+  if (name === "git") gitRules(words, dynamic, state.dir);
   if (name === "gh") ghRules({ words, dynamic, cmd, ...state, group: words[1], verb: words[2] });
   slowLaneRules(words);
   if (FAST_TRACK_AUTHORS.has(input.agent_type ?? "") && runsScript(words, "fast-track.mjs")) {
@@ -314,7 +399,15 @@ function trackWrites(state, cmd) {
 const STASH_READS = new Set(["list", "show"]);
 const GIT_RULES = [
   {
-    when: (g) => g.sub === "stash" && !STASH_READS.has(g.rest.find((w) => !w.startsWith("-"))),
+    when: (g) => g.sub === "push" && landsOnMain(g),
+    reason:
+      "Refused: this push lands on `main`. Nothing is pushed to `main`: a pull request lands " +
+      "there. Push the branch under its own name, `git push -u origin <branch>:<branch>` " +
+      "(the `:<branch>` matters while the branch tracks `origin/main`), and open a PR.",
+  },
+  {
+    when: (g) =>
+      subAgent && g.sub === "stash" && !STASH_READS.has(g.rest.find((w) => !w.startsWith("-"))),
     reason:
       "Refused: never `git stash` in a delivery stage: every worktree shares one stash list, so " +
       "a pop can take another agent's changes. Commit the work instead. `git stash list` and " +
@@ -322,15 +415,16 @@ const GIT_RULES = [
   },
   {
     when: (g) =>
-      g.sub === "rebase" ||
-      (g.sub === "pull" && g.rest.some((w) => /^(?:-r|--rebase(?!=false))/.test(w))),
+      subAgent &&
+      (g.sub === "rebase" ||
+        (g.sub === "pull" && g.rest.some((w) => /^(?:-r|--rebase(?!=false))/.test(w)))),
     reason:
       "Refused: never rebase in a delivery stage: a stack moves by merging forward " +
       "(`.agents/scripts/stack-sync.sh`), and a rebased branch needs a force push nobody may " +
       "make (delivery rule 15). Merge the base branch instead: `git merge origin/<base>`.",
   },
   {
-    when: (g) => g.sub === "push" && g.rest.some(rewritesRemote),
+    when: (g) => subAgent && g.sub === "push" && g.rest.some(rewritesRemote),
     reason:
       "Refused: this push rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force` or " +
       "`--delete`). Push fast-forwards only; when the push is rejected, merge the remote " +
@@ -338,11 +432,61 @@ const GIT_RULES = [
   },
 ];
 
-function gitRules(words) {
+function gitRules(words, dynamic, dir) {
   let at = 1;
-  while (at < words.length && words[at].startsWith("-"))
+  let inDir = dir;
+  while (at < words.length && words[at].startsWith("-")) {
+    if (words[at] === "-C" && words[at + 1] !== undefined)
+      inDir = path.resolve(inDir, words[at + 1]);
     at += GIT_VALUE_FLAGS.has(words[at]) ? 2 : 1;
-  refuseFirst(GIT_RULES, { sub: words[at], rest: words.slice(at + 1) });
+  }
+  refuseFirst(GIT_RULES, {
+    sub: words[at],
+    rest: words.slice(at + 1),
+    dynamic: dynamic.slice(at + 1),
+    dir: inDir,
+  });
+}
+
+function landsOnMain(g) {
+  const operands = [];
+  for (let i = 0; i < g.rest.length; i++) {
+    if (PUSH_VALUE_FLAGS.has(g.rest[i])) i++;
+    else if (!g.rest[i].startsWith("-"))
+      operands.push({ text: g.rest[i].replace(/^\+/, ""), dynamic: g.dynamic[i] });
+  }
+  const [remote, ...refspecs] = operands;
+  if (remote !== undefined && !remote.dynamic && remote.text !== "origin") return false;
+  if (g.rest.some((w) => /^--(?:all|branches|mirror)$/.test(w))) return true;
+  const current = currentBranch(g.dir);
+  if (refspecs.length > 0) return refspecs.some((s) => pushTarget(s, current, g.dir) === "main");
+  // why: `--tags` with no refspec pushes tags only; a plain push goes to the branch's own remote.
+  if (g.rest.includes("--tags")) return false;
+  if (current === "main") return true;
+  return gitConfig(g.dir, `branch.${current}.remote`) === "origin" && tracksMain(g.dir, current);
+}
+
+// why: git sends a refspec with no `:<dst>` to the branch of the same name, but to the branch's
+// upstream when the source is a branch name and `push.default` is `upstream`; `HEAD` is never
+// mapped. A source the guard cannot read (`$b`) is taken for the current branch.
+function pushTarget(spec, current, dir) {
+  const colon = spec.text.indexOf(":");
+  if (colon !== -1) return spec.text.slice(colon + 1).replace(/^refs\/heads\//, "");
+  if (spec.text === "HEAD" || spec.text === "@") return current;
+  const branch = spec.dynamic ? current : spec.text.replace(/^refs\/heads\//, "");
+  return tracksMain(dir, branch) ? "main" : branch;
+}
+
+function tracksMain(dir, branch) {
+  return (
+    branch !== "" &&
+    gitConfig(dir, "push.default") === "upstream" &&
+    gitConfig(dir, `branch.${branch}.merge`) === "refs/heads/main"
+  );
+}
+
+function gitConfig(dir, key) {
+  return gitOutput(dir, ["config", "--get", key]);
 }
 
 function rewritesRemote(word) {
@@ -645,8 +789,12 @@ function flagValues(words, names, from = 1) {
 }
 
 function currentBranch(dir) {
+  return gitOutput(dir, ["branch", "--show-current"]);
+}
+
+function gitOutput(dir, gitArgs) {
   try {
-    return execFileSync("git", ["-C", dir, "branch", "--show-current"], {
+    return execFileSync("git", ["-C", dir, ...gitArgs], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -662,6 +810,126 @@ function squash(text) {
 function refuse(reason) {
   process.stderr.write(`${reason}\n`);
   process.exit(2);
+}
+
+// why: a refusal costs the agent a turn, so a call with one known fix is changed, not refused;
+// the changed call still meets every rule below it.
+function stageCall(raw) {
+  if (HOOK_BYPASS.some((re) => re.test(code(raw)))) {
+    refuse(
+      "Refused: this skips the git hooks. They run the checks agents never run by hand. Only the " +
+        "build stage may skip Fallow, on a push before its last cycle: " +
+        "`LEFTHOOK_EXCLUDE=fallow git push ...`.",
+    );
+  }
+  const fixed = { ...args };
+  const notes = [];
+  const typecheck = asTypecheck(raw);
+  if (typecheck !== null) {
+    fixed.command = typecheck;
+    notes.push(TYPECHECK_NOTE);
+  }
+  const command = fixed.command ?? "";
+  const shell = code(command);
+  if (!/slow-e2e\.sh|\.exit\b/.test(command)) {
+    if (TEST_RUNNER.test(shell) && !(Number(args.timeout) >= 300000)) {
+      fixed.timeout = 600000;
+      notes.push(TIMEOUT_NOTE);
+    }
+    waitingRules(command, shell);
+  }
+  const found = forbiddenCheck(shell);
+  if (found !== null) {
+    refuse(
+      `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
+        "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
+        "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
+        'the commands under "Tests agents run"; for types that is `pnpm typecheck`.',
+    );
+  }
+  return { input: fixed, notes };
+}
+
+function waitingRules(raw, shell) {
+  if (args.run_in_background === true || BACKGROUND_JOB.test(shell)) {
+    refuse(
+      "Refused: nothing runs in the background in a delivery stage. A background job holds " +
+        "your report until it ends or hits its 30-minute cap, and polling it costs the turn. " +
+        "Run the command in the foreground with `timeout: 600000` on the Bash call.",
+    );
+  }
+  if (SLEEP_LOOP.test(shell)) {
+    refuse(
+      "Refused: no loop that sleeps. Nothing you started runs in the background, so there is " +
+        "nothing to wait for: run the command itself in the foreground with `timeout: 600000`.",
+    );
+  }
+  if (BARE_CAT.test(raw)) {
+    refuse(
+      "Refused: `cat > file` with no input reads stdin until the tool times out. Write the " +
+        "file with the Write tool, or give cat a heredoc (`cat > file <<'EOF'`).",
+    );
+  }
+}
+
+// why: the parser says which commands are a `tsc --noEmit` that `pnpm typecheck` replaces, in a
+// directory that has the script; the pattern finds their text. The command is rewritten only
+// when both agree on the count, so text inside a string or after `echo` is never touched.
+function asTypecheck(raw) {
+  const state = { dir: cwd };
+  let followed = true;
+  let runs = 0;
+  for (const cmd of parseShell(raw)) {
+    const { words, dynamic } = commandWords(cmd);
+    if (words.length === 0) continue;
+    if (path.basename(words[0]) === "cd") {
+      followed = changesDirectory(state, words, dynamic) && followed;
+    } else if (followed && !dynamic.some(Boolean) && isTypecheck(words)) {
+      if (!hasTypecheck(state.dir)) return null;
+      runs++;
+    }
+  }
+  const spans = [...blanked(raw).matchAll(TSC_RUN)].filter((m) => isTypecheck(m[0].split(/\s+/)));
+  if (runs === 0 || spans.length !== runs) return null;
+  let out = raw;
+  for (const m of spans.reverse())
+    out = `${out.slice(0, m.index)}pnpm typecheck${out.slice(m.index + m[0].length)}`;
+  return out;
+}
+
+function isTypecheck(words) {
+  let at = 0;
+  if (words[0] === "pnpm" || words[0] === "npx")
+    for (at = 1; words[at] === "exec" || words[at]?.startsWith("-");) at++;
+  if (path.basename(words[at] ?? "") !== "tsc") return false;
+  const rest = words.slice(at + 1);
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "-p" || rest[i] === "--project") {
+      if (!TYPECHECK_PROJECTS.has(path.posix.join(rest[++i] ?? "-", "."))) return false;
+    } else if (rest[i] !== "--noEmit") return false;
+  }
+  return rest.includes("--noEmit");
+}
+
+function hasTypecheck(dir) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    return typeof manifest.scripts?.typecheck === "string";
+  } catch {
+    return false;
+  }
+}
+
+// why: `code` without moving anything: a heredoc body and a quoted string keep their length, so
+// a match's index is its index in the command.
+function blanked(command) {
+  const fill = (text) => text.replace(/[^\n]/g, "_");
+  return command
+    .replace(
+      /(<<-?\s*(['"]?)(\w+)\2[^\n]*\n)([\s\S]*?\n\s*\3)(?=\n|$)/g,
+      (_all, head, _quote, _word, body) => head + fill(body),
+    )
+    .replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, fill);
 }
 
 function code(command) {
@@ -737,54 +1005,10 @@ const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
 
 if (tool === "Agent" || tool === "Task") agentRules();
 
-if (tool === "Bash" && subAgent) {
-  const shell = code(args.command ?? "");
-  if (HOOK_BYPASS.some((re) => re.test(shell))) {
-    refuse(
-      "Refused: this skips the git hooks. They run the checks agents never run by hand. Only the " +
-        "build stage may skip Fallow, on a push before its last cycle: " +
-        "`LEFTHOOK_EXCLUDE=fallow git push ...`.",
-    );
-  }
-  const raw = args.command ?? "";
-  const slowLane = /slow-e2e\.sh|\.exit\b/.test(raw);
-  if (!slowLane) {
-    if (TEST_RUNNER.test(shell) && !(Number(args.timeout) >= 300000)) {
-      refuse(
-        "Refused: a test run needs `timeout: 600000` on this Bash call. The default 120 s " +
-          "moves a two-minute run to the background, and a background job holds your report " +
-          "until it ends. Run it again in the foreground with the timeout set.",
-      );
-    }
-    if (args.run_in_background === true || BACKGROUND_JOB.test(shell)) {
-      refuse(
-        "Refused: nothing runs in the background in a delivery stage. A background job holds " +
-          "your report until it ends or hits its 30-minute cap, and polling it costs the turn. " +
-          "Run the command in the foreground with `timeout: 600000` on the Bash call.",
-      );
-    }
-    if (SLEEP_LOOP.test(shell)) {
-      refuse(
-        "Refused: no loop that sleeps. Nothing you started runs in the background, so there is " +
-          "nothing to wait for: run the command itself in the foreground with `timeout: 600000`.",
-      );
-    }
-    if (BARE_CAT.test(raw)) {
-      refuse(
-        "Refused: `cat > file` with no input reads stdin until the tool times out. Write the " +
-          "file with the Write tool, or give cat a heredoc (`cat > file <<'EOF'`).",
-      );
-    }
-  }
-  const found = forbiddenCheck(shell);
-  if (found !== null) {
-    refuse(
-      `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
-        "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
-        "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
-        'the commands under "Tests agents run"; for types that is `pnpm typecheck`.',
-    );
-  }
+if (tool === "Bash") {
+  const call = subAgent ? stageCall(args.command ?? "") : { input: args, notes: [] };
+  commandRules(call.input.command ?? "");
+  if (call.notes.length > 0)
+    answer({ updatedInput: call.input, additionalContext: call.notes.join(" ") });
 }
-if (tool === "Bash") commandRules(args.command ?? "");
 process.exit(0);

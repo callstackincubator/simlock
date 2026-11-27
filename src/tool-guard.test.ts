@@ -38,6 +38,41 @@ function bash(
   });
 }
 
+// why: what the hook answers on stdout when it changes a call or adds context to it.
+function answered(input: object): {
+  status: number | null;
+  updatedInput?: Record<string, unknown>;
+  additionalContext?: string;
+} {
+  const result = spawnSync("node", [SCRIPT], { input: JSON.stringify(input), encoding: "utf8" });
+  const output = result.stdout === "" ? {} : JSON.parse(result.stdout).hookSpecificOutput;
+  return {
+    status: result.status,
+    updatedInput: output.updatedInput,
+    additionalContext: output.additionalContext,
+  };
+}
+
+// why: a push's target depends on the branch, its upstream and `push.default`, so each case
+// gets a repository of its own; nothing is ever pushed.
+function checkout(branch: string, config: Record<string, string> = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), "tool-guard-repo-"));
+  execFileSync("git", ["init", "-q", "-b", branch, dir]);
+  for (const [key, value] of Object.entries({ "push.default": "simple", ...config }))
+    execFileSync("git", ["-C", dir, "config", key, value]);
+  return slashed(dir);
+}
+
+// why: how the branch of the 2026-11-20 push stood: cut from `origin/main`, so it tracked it,
+// on a machine whose `push.default` is `upstream`.
+function tracksMain(branch: string, pushDefault = "upstream"): string {
+  return checkout(branch, {
+    "push.default": pushDefault,
+    [`branch.${branch}.remote`]: "origin",
+    [`branch.${branch}.merge`]: "refs/heads/main",
+  });
+}
+
 function agent(toolInput: object, agentId: string | null = null) {
   return call({ tool_name: "Agent", tool_input: toolInput, ...(agentId && { agent_id: agentId }) });
 }
@@ -56,6 +91,26 @@ function bodyFile(body: string): string {
 
 const OK = { status: 0, stderr: "" };
 
+// why: the prompt the agent receives when the hook changed it, else the hook's status.
+function sent(type: string, prompt: string, agentId?: string) {
+  const result = spawnSync("node", [SCRIPT], {
+    input: JSON.stringify({
+      tool_name: "Agent",
+      tool_input: { subagent_type: type, prompt, run_in_background: false },
+      ...(agentId !== undefined && { agent_id: agentId }),
+    }),
+    encoding: "utf8",
+  });
+  if (result.stdout === "") return { status: result.status, stderr: result.stderr };
+  return JSON.parse(result.stdout).hookSpecificOutput.updatedInput.prompt as string;
+}
+
+// why: a `##` section of a rule file as it stands in this checkout, cut by its headings.
+function section(file: string, heading: string, next: string): string {
+  const text = readFileSync(join(ROOT, "docs", "internal", "agent-rules", file), "utf8");
+  return text.slice(text.indexOf(heading), text.indexOf(next)).trim();
+}
+
 describe("tool-guard.mjs", () => {
   it.each([
     "pnpm check",
@@ -63,14 +118,15 @@ describe("tool-guard.mjs", () => {
     "pnpm test",
     "pnpm typecheck:e2e",
     "pnpm exec oxfmt src/a.ts",
-    "npx -y tsc --noEmit",
+    "npx -y tsc --noEmit -p e2e",
     "node_modules/.bin/oxlint src",
     "node .agents/scripts/comment-lint.mjs --base origin/main",
     "pnpm test:e2e",
     "pnpm test:console",
     "sed -i '' 's/a/b/' f.ts && pnpm check 2>&1 | tail -5",
     "timeout 100 pnpm fallow",
-    "pnpm tsc --noEmit",
+    "pnpm tsc -p e2e/tsconfig.typecheck.json --noEmit",
+    "pnpm exec tsc --noEmit src/a.ts",
     "pnpm oxlint src",
     "pnpm exec depcruise src e2e ui --ignore-known",
     "pnpm --dir . check",
@@ -108,9 +164,8 @@ describe("tool-guard.mjs", () => {
   });
 
   it.each([
-    ["pnpm exec vitest run --project unit src/a.test.ts", {}, "timeout: 600000"],
-    ["pnpm test:changed", { timeout: 120_000 }, "timeout: 600000"],
     ["ls", { run_in_background: true, timeout: 600_000 }, "background"],
+    ["pnpm test:changed", { run_in_background: true }, "background"],
     ["(git push origin x > log 2>&1; echo done) &", { timeout: 600_000 }, "background"],
     ["until ! pgrep -f lefthook >/dev/null; do sleep 5; done; tail x", {}, "loop that sleeps"],
     ["for _ in $(seq 18); do [ -f out ] && break; sleep 30; done", {}, "loop that sleeps"],
@@ -182,17 +237,133 @@ describe("tool-guard.mjs", () => {
     );
   });
 
-  it("refuses a sub-agent's test run without the long timeout", () => {
-    const result = bash("pnpm exec vitest run --project unit src/a.test.ts", "a1", "reviewer", {
-      timeout: 120000,
-    });
+  it.each([
+    ["pnpm exec vitest run --project unit src/a.test.ts 2>&1 | tail -30", {}],
+    ["pnpm test:changed", { timeout: 120_000 }],
+    ["cd ui && pnpm exec playwright test e2e/console/sign-in.spec.ts", { timeout: 200_000 }],
+  ])("gives a sub-agent's test run the long timeout, and says so: %s", (command, given) => {
+    const toolInput = { command, description: "run the test", ...given };
 
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("timeout: 600000");
+    const result = answered({ tool_name: "Bash", tool_input: toolInput, agent_id: "a1" });
+
+    expect(result.status).toBe(0);
+    expect(result.updatedInput).toEqual({ ...toolInput, timeout: 600000 });
+    expect(result.additionalContext).toContain("set `timeout: 600000` on this Bash call");
   });
 
-  it("names the typecheck command when it refuses a sub-agent's tsc", () => {
-    expect(bash("pnpm exec tsc --noEmit").stderr).toContain("for types that is `pnpm typecheck`");
+  it("leaves alone a test run that has the long timeout, and the main session's", () => {
+    const toolInput = { command: "pnpm test:changed", timeout: 600000 };
+
+    expect(answered({ tool_name: "Bash", tool_input: toolInput, agent_id: "a1" })).toEqual({
+      status: 0,
+    });
+    expect(answered({ tool_name: "Bash", tool_input: { command: "pnpm test:changed" } })).toEqual({
+      status: 0,
+    });
+  });
+
+  it.each([
+    ["pnpm exec tsc --noEmit -p . 2>&1 | head -30", "pnpm typecheck 2>&1 | head -30"],
+    ["pnpm exec tsc --noEmit", "pnpm typecheck"],
+    ["timeout 300 npx tsc --noEmit -p .", "timeout 300 pnpm typecheck"],
+    [
+      "./node_modules/.bin/tsc --noEmit -p tsconfig.json 2>&1 | tail -5; echo tsc-exit=$?",
+      "pnpm typecheck 2>&1 | tail -5; echo tsc-exit=$?",
+    ],
+    ["npx tsc -p ui/tsconfig.json --noEmit", "pnpm typecheck"],
+    [
+      "(pnpm exec tsc --noEmit -p . 2>&1 | tail -15); pnpm exec tsc --noEmit | grep -c TS",
+      "(pnpm typecheck 2>&1 | tail -15); pnpm typecheck | grep -c TS",
+    ],
+    [
+      'git commit -qm "fix: pnpm exec tsc --noEmit passes" && pnpm exec tsc --noEmit',
+      'git commit -qm "fix: pnpm exec tsc --noEmit passes" && pnpm typecheck',
+    ],
+    [
+      "cat > note.md <<'EOF'\nnpx tsc --noEmit\nEOF\nnpx tsc --noEmit",
+      "cat > note.md <<'EOF'\nnpx tsc --noEmit\nEOF\npnpm typecheck",
+    ],
+  ])("runs pnpm typecheck in place of a sub-agent's %s, and says so", (command, repaired) => {
+    const toolInput = { command, timeout: 600000 };
+
+    const result = answered({
+      tool_name: "Bash",
+      tool_input: toolInput,
+      agent_id: "a1",
+      cwd: slashed(ROOT),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.updatedInput).toEqual({ ...toolInput, command: repaired });
+    expect(result.additionalContext).toContain("`pnpm typecheck` in place of");
+  });
+
+  it("refuses a sub-agent's tsc where pnpm typecheck is not the same check", () => {
+    const elsewhere = slashed(mkdtempSync(join(tmpdir(), "tool-guard-scratch-")));
+    const reason = "for types that is `pnpm typecheck`";
+
+    expect(bash("pnpm exec tsc --noEmit -p e2e").stderr).toContain(reason);
+    expect(bash("pnpm exec tsc --noEmit", "a1", "reviewer", { cwd: elsewhere }).stderr).toContain(
+      reason,
+    );
+    expect(bash(`cd ${elsewhere} && npx tsc --noEmit -p .`).stderr).toContain(reason);
+    expect(bash('cd "$W" && pnpm exec tsc --noEmit').stderr).toContain(reason);
+    expect(bash('cd "$W" && cd src && cd .. && pnpm exec tsc --noEmit').stderr).toContain(reason);
+    expect(bash("pnpm exec tsc --noEmit -p . && pnpm exec tsc --noEmit -p e2e").stderr).toContain(
+      "`pnpm exec tsc --noEmit -p e2e`",
+    );
+  });
+
+  it("refuses the push that landed on main on 2026-11-20, from a sub-agent and from the main session", () => {
+    const cwd = tracksMain("bug/1790-repro");
+    const command = "git push -u origin bug/1790-repro 2>&1 | tail -8";
+
+    for (const agentId of ["a1", null]) {
+      const result = bash(command, agentId, "bug-triager", { cwd });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("this push lands on `main`");
+    }
+  });
+
+  it.each([
+    ["git push origin main", checkout("task/1")],
+    ["git push -u origin main 2>&1 | tail -3", checkout("task/1")],
+    ["git push origin HEAD:main", checkout("task/1")],
+    ["git push origin 5b688e1ce:main", checkout("task/1")],
+    ["git push origin :refs/heads/main", checkout("task/1")],
+    ["git push -u origin HEAD:refs/heads/main", checkout("task/1")],
+    ["git push origin task/1 +task/2:main", checkout("task/1")],
+    ["git push --all origin", checkout("task/1")],
+    ["git push", tracksMain("task/1")],
+    ["git push -u origin", tracksMain("task/1")],
+    ["git push origin refs/heads/task/1", tracksMain("task/1")],
+    ['git push -u origin "$(git branch --show-current)"', tracksMain("task/1")],
+    ["git push origin HEAD", checkout("main")],
+    ["git push", checkout("main")],
+  ])("refuses %s when it lands on main", (command, cwd) => {
+    for (const agentId of ["a1", null]) {
+      const result = bash(command, agentId, "implementer", { cwd });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("this push lands on `main`");
+    }
+    expect(bash(`git -C ${cwd} ${command.slice("git ".length)}`, null).status).toBe(2);
+  });
+
+  it.each([
+    ["git push -u origin task/1", checkout("task/1")],
+    ["git push", checkout("task/1")],
+    ["git push -u origin bug/1790-repro", tracksMain("bug/1790-repro", "simple")],
+    ["git push -u origin HEAD:refs/heads/bug/1790-repro", tracksMain("bug/1790-repro")],
+    ["git push -u origin bug/1790-repro:bug/1790-repro", tracksMain("bug/1790-repro")],
+    ["git push origin HEAD", tracksMain("task/1")],
+    ["git push origin main:task/1", checkout("task/1")],
+    ["git push origin task/1:refs/heads/docs/main", checkout("task/1")],
+    ["git push fork HEAD:main", checkout("task/1")],
+    ["git push origin --tags", checkout("main")],
+    ['git commit -m "docs: never git push origin main"', checkout("task/1")],
+  ])("lets %s through when it lands on another branch", (command, cwd) => {
+    expect(bash(command, "a1", "implementer", { cwd })).toEqual(OK);
+    expect(bash(command, null, "implementer", { cwd })).toEqual(OK);
   });
 
   it.each([
@@ -414,18 +585,6 @@ describe("tool-guard.mjs", () => {
     mkdirSync(join(inputs, "briefs"));
     writeFileSync(join(inputs, "briefs", "review-later-round.md"), "LATER pinned\n");
     writeFileSync(join(inputs, "briefs", "review-claims.md"), "CLAIMS pinned\n");
-    const sent = (type: string, prompt: string, agentId?: string) => {
-      const result = spawnSync("node", [SCRIPT], {
-        input: JSON.stringify({
-          tool_name: "Agent",
-          tool_input: { subagent_type: type, prompt, run_in_background: false },
-          ...(agentId !== undefined && { agent_id: agentId }),
-        }),
-        encoding: "utf8",
-      });
-      if (result.stdout === "") return { status: result.status, stderr: result.stderr };
-      return JSON.parse(result.stdout).hookSpecificOutput.updatedInput.prompt as string;
-    };
     const lensTag = "ledger: pr=975 issue=966 stage=review round=2 role=claims lens=-";
 
     expect(sent("implementer", `${LEDGER}\nissue: 966\nmode: build`)).toBe(
@@ -449,6 +608,65 @@ describe("tool-guard.mjs", () => {
     expect(sent("claims-reviewer", `${lensTag}\ninputs: ${inputs}/gone\nround: 1`, "a1")).toEqual(
       OK,
     );
+  });
+
+  it("gives a reviewer whose prompt names inputs the protocol pinned there, and this checkout's when there is none", () => {
+    const protocol = readFileSync(join(ROOT, "docs", "internal", "REVIEW.md"), "utf8");
+    const inputs = slashed(mkdtempSync(join(tmpdir(), "tool-guard-protocol-")));
+    writeFileSync(join(inputs, "review-protocol.md"), "PROTOCOL pinned\n");
+    const replay = `${LEDGER}\npr: 975\nreplay: true\ninputs: `;
+
+    expect(sent("reviewer", `${replay}${inputs}`)).toBe(
+      `${replay}${inputs}\nprotocol:\nPROTOCOL pinned\n`,
+    );
+    expect(sent("reviewer", `${replay}${inputs}/gone`)).toBe(
+      `${replay}${inputs}/gone\nprotocol:\n${protocol}`,
+    );
+  });
+
+  it("adds the pinned Tests agents run table to a code lens's prompt, after its brief", () => {
+    const inputs = slashed(mkdtempSync(join(tmpdir(), "tool-guard-rules-")));
+    mkdirSync(join(inputs, "briefs"));
+    mkdirSync(join(inputs, "rules"));
+    writeFileSync(join(inputs, "briefs", "review-code.md"), "CODE pinned\n");
+    writeFileSync(
+      join(inputs, "rules", "toolchain.md"),
+      "# Toolchain\n\n## Tests agents run\n\nTABLE pinned\n\n## Code search\n\nSEARCH\n",
+    );
+    const prompt = `ledger: pr=975 issue=966 stage=review round=1 role=code lens=behaviour\ninputs: ${inputs}\nround: 1`;
+
+    expect(sent("code-reviewer", prompt, "a1")).toBe(
+      `${prompt}\n=== briefs/review-code.md ===\nCODE pinned\n\n` +
+        '=== toolchain.md, "Tests agents run", in full ===\n## Tests agents run\n\nTABLE pinned\n',
+    );
+  });
+
+  it("adds this checkout's Slow lane section to a hardware verifier's prompt, once", () => {
+    const slowLane = section("toolchain.md", "## Slow lane", "## Other tools' source");
+    const prompt = "ledger: pr=975 issue=966 stage=hardware round=- role=hardware lens=-\npr: 975";
+    const added = `${prompt}\n=== toolchain.md, "Slow lane", in full ===\n${slowLane}\n`;
+
+    expect(sent("hardware-verifier", prompt)).toBe(added);
+    expect(sent("hardware-verifier", added)).toEqual(OK);
+  });
+
+  it("adds the test commands, testing rule 10 and delivery rules 8 and 17 to a bug triager's prompt", () => {
+    const tests = section("toolchain.md", "## Tests agents run", "## Code search");
+    const delivery = readFileSync(
+      join(ROOT, "docs", "internal", "agent-rules", "delivery.md"),
+      "utf8",
+    );
+    const rule = (from: string, to: string) =>
+      delivery.slice(delivery.indexOf(`\n${from}. **`) + 1, delivery.indexOf(`\n${to}. **`)).trim();
+
+    const prompt = sent("bug-triager", "issue: 1790") as string;
+
+    expect(prompt).toContain(`=== toolchain.md, "Tests agents run", in full ===\n${tests}\n`);
+    expect(prompt).toMatch(
+      /=== testing\.md, rule 10, in full ===\n10\. \*\*[^\n]+\n[\s\S]+\n=== delivery/,
+    );
+    expect(prompt).toContain(`=== delivery.md, rule 8, in full ===\n${rule("8", "9")}\n`);
+    expect(prompt).toContain(`=== delivery.md, rule 17, in full ===\n${rule("17", "18")}\n`);
   });
 
   it("refuses a code review off Opus on a diff that touches a strict area, outside a replay", () => {
