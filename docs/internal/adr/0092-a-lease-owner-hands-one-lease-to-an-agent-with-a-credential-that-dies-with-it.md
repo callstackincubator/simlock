@@ -100,10 +100,14 @@ calls on the lease already end with it.
 
 ### 4. agent-device attaches to the handed-over lease
 
-`agent-device open` with a handover credential does not lease a new
-device. The front maps the open onto the credential's lease, on the
-device that lease holds, as it already maps an allocate again after
-agent-device forgot one. A call that names another lease is refused, and
+`agent-device open --lease-id <lease>` with a handover credential does
+not lease a new device. agent-device already lets the caller name its
+lease id, and the front already uses one id for the agent-device lease
+and the simlock lease. So the front reads the credential's lease instead
+of requesting one, and forwards the allocate on the device that lease
+holds, as it already does when it allocates again after agent-device
+forgot a lease. An open with any other lease id is refused, with a
+message that names the handed-over lease. A call that names another lease is refused, and
 a call that names none is held to the credential's lease. `close`
 releases the agent-device lease and leaves the simlock lease to its
 owner.
