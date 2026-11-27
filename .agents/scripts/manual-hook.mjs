@@ -11,11 +11,16 @@
 // against the call's `cwd`, which a leading `cd <dir> &&` moves. The root AGENTS.md is never
 // sent: the harness loads it.
 //
+// Two roles get none, for they neither edit nor judge code: the `reviewer` and
+// `hardware-verifier` agents, and a main session from the moment it starts the `deliver` skill.
+// Nothing in a hook's input names a session's skill, so the transcript is read for it: the Skill
+// tool's call, or the `/deliver` command a person typed.
+//
 // Claude Code moves a hook's text over 10,000 characters to a file and shows only a preview, so
 // one call's text stays under LIMIT: table padding is dropped, and a manual that does not fit
 // goes in parts, at line ends, the next part with the agent's next matching call. State lives in
 // $TMPDIR/claude-manuals-<session>[-<agent>].json, so each agent gets each manual once, from
-// whichever checkout it read first.
+// whichever checkout it read first. It also holds how far the transcript was read.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,9 +28,12 @@ import path from "node:path";
 const TOPS = ["src", "ui"];
 const LIMIT = 9_500;
 const MORE = "\n[The rest of this manual comes with your next tool call.]";
+const NO_MANUAL_AGENTS = new Set(["reviewer", "hardware-verifier"]);
+const NO_MANUAL_SKILL = /^(?:.*:)?deliver$/;
+const SKILL_COMMAND = /<command-name>\/?([\w:-]+)<\/command-name>/;
 
 const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
-if (!input.session_id) process.exit(0);
+if (!input.session_id || NO_MANUAL_AGENTS.has(input.agent_type)) process.exit(0);
 
 const tool = input.tool_input ?? {};
 const text = [tool.command, tool.path, tool.pattern, tool.glob]
@@ -60,7 +68,7 @@ const key = [input.session_id, input.agent_id]
   .join("-")
   .replace(/[^\w-]/g, "_");
 const stateFile = path.join(os.tmpdir(), `claude-manuals-${key}.json`);
-let state = { done: [], partial: [] };
+let state = { done: [], partial: [], read: 0, deliver: false };
 try {
   state = { ...state, ...JSON.parse(fs.readFileSync(stateFile, "utf8")) };
 } catch {}
@@ -72,6 +80,10 @@ const queue = [
     .map((m) => ({ ...m, offset: 0 })),
 ];
 if (queue.length === 0) process.exit(0);
+if (typeof input.agent_id !== "string" && runsDeliver()) {
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  process.exit(0);
+}
 
 const pieces = [];
 let used = 0;
@@ -97,13 +109,55 @@ for (const m of queue) {
   used = LIMIT;
   partial.push({ ...m, offset: m.offset + cut });
 }
-fs.writeFileSync(stateFile, JSON.stringify({ done, partial }));
+fs.writeFileSync(stateFile, JSON.stringify({ ...state, done, partial }));
 
 console.log(
   JSON.stringify({
     hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: pieces.join("\n\n") },
   }),
 );
+
+// why: a transcript only grows, so each call reads the whole lines added since the last one.
+function runsDeliver() {
+  if (state.deliver || typeof input.transcript_path !== "string") return state.deliver;
+  let added;
+  try {
+    const all = fs.readFileSync(input.transcript_path);
+    added = all.subarray(state.read, all.lastIndexOf(10) + 1);
+  } catch {
+    return false;
+  }
+  state.read += added.length;
+  state.deliver = added
+    .toString("utf8")
+    .split("\n")
+    .some((line) => /"Skill"|<command-name>/.test(line) && startsDeliver(line));
+  return state.deliver;
+}
+
+// why: a tool result that quotes either form is a `tool_result` block, which is not read.
+function startsDeliver(line) {
+  let record;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  const content = record.message?.content;
+  const blocks = typeof content === "string" ? [{ type: "text", text: content }] : (content ?? []);
+  if (!Array.isArray(blocks)) return false;
+  if (record.type === "assistant") {
+    return blocks.some(
+      (b) => b.type === "tool_use" && b.name === "Skill" && NO_MANUAL_SKILL.test(b.input?.skill),
+    );
+  }
+  return (
+    record.type === "user" &&
+    blocks.some(
+      (b) => b.type === "text" && NO_MANUAL_SKILL.test(SKILL_COMMAND.exec(b.text)?.[1] ?? ""),
+    )
+  );
+}
 
 function compact(manual) {
   return manual
