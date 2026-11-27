@@ -1,6 +1,6 @@
 # 0092. An enrolled device and a platform's virtual devices carry tags a lease may require
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-27
 - **Feature:** #1894 (request #1542). The names' bounds, the messages, the
   stored column and the operation's shape are in the feature's design
