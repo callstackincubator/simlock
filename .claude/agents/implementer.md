@@ -35,8 +35,8 @@ from `toolchain.md`; the tests you run are copied here.
 `src/contract/`, and only the spec files it changed or whose page it
 changes; CI runs the whole lane. A page's behaviour is a DOM test, which
 `pnpm test:changed` runs; this lane holds what needs a real daemon or
-browser engine. Always with a spec file, in the foreground, with
-`timeout: 600000` on the Bash call (the tool guard refuses otherwise).
+browser engine. Always with a spec file, in the foreground; the tool guard
+sets `timeout: 600000` on a sub-agent's test run.
 
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.

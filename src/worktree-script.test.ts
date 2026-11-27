@@ -53,7 +53,44 @@ function run(cwd: string, ...args: string[]): string {
     .at(-1)!;
 }
 
+// why: the script installs with the pnpm that package.json pins; this one only records the call.
+function fakePnpm(root: string, main: string, record: string): NodeJS.ProcessEnv {
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  writeFakeCommand(
+    bin,
+    "pnpm",
+    `#!/bin/sh\n[ "$1" = --version ] && { echo 1.2.3; exit 0; }\n{ pwd -W 2>/dev/null || pwd; } >> "${record}"\n`,
+  );
+  writeFileSync(
+    join(main, "package.json"),
+    JSON.stringify({ devEngines: { packageManager: { name: "pnpm", version: "1.2.3" } } }),
+  );
+  git(main, "add", "package.json");
+  git(main, "commit", "-qm", "package.json");
+  return { ...process.env, ...fakeCommandEnv(bin) };
+}
+
 describe("worktree.sh", () => {
+  it("cuts a new branch from its base without tracking it, and a branch origin has tracking its own", () => {
+    const { root, main } = fixture();
+    const env = fakePnpm(root, main, join(root, "installs"));
+    git(main, "push", "-q", "origin", "origin/main:refs/heads/task/3");
+    const worktree = (branch: string) =>
+      execFileSync(...scriptCommand(SCRIPT, [branch]), { cwd: main, encoding: "utf8", env }).trim();
+    const upstream = (dir: string, branch: string) =>
+      git(dir, "for-each-ref", "--format=%(upstream:short)", `refs/heads/${branch}`);
+
+    const cut = worktree("task/2");
+    const resumed = worktree("task/3");
+
+    expect(git(cut, "branch", "--show-current")).toBe("task/2");
+    expect(git(cut, "rev-parse", "HEAD")).toBe(git(main, "rev-parse", "origin/main"));
+    expect(upstream(cut, "task/2")).toBe("");
+    expect(git(resumed, "branch", "--show-current")).toBe("task/3");
+    expect(upstream(resumed, "task/3")).toBe("origin/task/3");
+  });
+
   it("hands every stage of a task the worktree that already holds its branch, fast-forwarded to origin", () => {
     const { root, origin, main, stage } = fixture();
     const elsewhere = join(root, "elsewhere");
@@ -92,26 +129,14 @@ describe("worktree.sh", () => {
 
   it("--detach takes --prepare before or after the commit, and installs into the new worktree", () => {
     const { root, main } = fixture();
-    const bin = join(root, "bin");
     const installs = join(root, "installs");
-    mkdirSync(bin);
-    writeFakeCommand(
-      bin,
-      "pnpm",
-      `#!/bin/sh\n[ "$1" = --version ] && { echo 1.2.3; exit 0; }\n{ pwd -W 2>/dev/null || pwd; } >> "${installs}"\n`,
-    );
-    writeFileSync(
-      join(main, "package.json"),
-      JSON.stringify({ devEngines: { packageManager: { name: "pnpm", version: "1.2.3" } } }),
-    );
-    git(main, "add", "package.json");
-    git(main, "commit", "-qm", "package.json");
+    const env = fakePnpm(root, main, installs);
     const head = git(main, "rev-parse", "HEAD");
     const detach = (...args: string[]) =>
       execFileSync(...scriptCommand(SCRIPT, ["--detach", ...args]), {
         cwd: main,
         encoding: "utf8",
-        env: { ...process.env, ...fakeCommandEnv(bin) },
+        env,
       }).trim();
 
     const after = detach(head, "--prepare");

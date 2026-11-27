@@ -70,8 +70,13 @@ jobs:
 
   # why: the Windows paths are otherwise tested only by passing `platform: "win32"` on Linux;
   # bash is Git Bash, which the repository's tooling needs on Windows (ADR 0087 section 6).
+  # One runner spends 11 to 17 minutes in the tests, where every other job ends within 5, so
+  # they run in three shards.
   windows-unit:
-    name: Unit tests (Windows)
+    name: Unit tests (Windows) (${{ matrix.shard }}/3)
+    needs: changes
+    # Runs unless Changes said there is nothing to test, so a broken Changes job runs it.
+    if: ${{ !cancelled() && needs.changes.outputs.windows != 'false' }}
     runs-on: windows-2025
     permissions:
       contents: read
@@ -79,6 +84,11 @@ jobs:
     defaults:
       run:
         shell: bash
+    strategy:
+      # why: one red shard must not cancel the others, or their failures go unreported.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,7 +106,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Unit tests
-        run: pnpm run test:unit
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm run test:unit --shard="$SHARD/3"
 
   timing:
     name: Timing tests
@@ -170,7 +182,7 @@ jobs:
 
   # why: branch protection requires the check named Quality, so this job stands for all of the
   # above. `always()` makes it report a failure when a job it needs fails, where a job skipped
-  # by a failed need would count as passed.
+  # by a failed need would count as passed; a Windows job skipped by Changes leaves it green.
   quality:
     name: Quality
     needs: [static, unit, windows-unit, timing, e2e, swift]
@@ -191,9 +203,9 @@ jobs:
             esac
           done
 
-  # Decides whether the Console job has work to do. A workflow-level `paths` filter would leave
-  # the required Console check pending forever on a PR it skips; a job skipped by `if` reports
-  # success instead. Pushes to main always run the console lane.
+  # Decides whether the Console lane and the Windows unit job have work to do. A workflow-level
+  # `paths` filter would leave a required check pending forever on a PR it skips; a job skipped
+  # by `if` reports success instead. Pushes to main always run both.
   changes:
     name: Changes
     runs-on: ubuntu-24.04
@@ -202,18 +214,20 @@ jobs:
     timeout-minutes: 5
     outputs:
       console: ${{ steps.filter.outputs.console }}
+      windows: ${{ steps.filter.outputs.windows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # A pull_request run checks out the merge commit; its first parent is the base.
           fetch-depth: 2
-      - name: Files the console lane depends on
+      - name: Files the console lane and the Windows unit job depend on
         id: filter
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
             echo "console=true" >>"$GITHUB_OUTPUT"
             echo "browsers=all" >>"$GITHUB_OUTPUT"
+            echo "windows=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           # The daemon and the CLI the console fixtures start reach almost all of src/, so any
@@ -226,6 +240,18 @@ jobs:
             echo "console=true" >>"$GITHUB_OUTPUT"
           else
             echo "console=false" >>"$GITHUB_OUTPUT"
+          fi
+          # The Windows shards run when the tests' result can differ on Windows: a change to
+          # the code and tests under src/, ui/ and packages/, to a script, workflow step or
+          # tool config the tests run, or to a root file that sets how they build, run and
+          # check out. A file the tests only read as text (docs, website pages, agent config,
+          # e2e sources, the other workflows) gets the same answer from the Linux unit job,
+          # which runs on every pull request.
+          if printf '%s\n' "$changed" | grep -q -E \
+            '^(src/|ui/|packages/|scripts/|\.agents/scripts/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|turbo\.json$|tsconfig[^/]*\.json$|vitest[^/]*\.config\.ts$|lefthook\.yml$|\.gitattributes$|\.oxlintrc\.json$|\.dependency-cruiser[^/]*$|\.github/workflows/(ci|release)\.yml$)'; then
+            echo "windows=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "windows=false" >>"$GITHUB_OUTPUT"
           fi
 
   console-lane:

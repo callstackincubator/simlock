@@ -53,6 +53,15 @@
       "Bash(git push * -f*)",
       "Bash(git push +*)",
       "Bash(git push * +*)",
+      "Bash(git push origin main *)",
+      "Bash(git push * origin main)",
+      "Bash(git push * origin main *)",
+      "Bash(git push origin *:main)",
+      "Bash(git push origin *:main *)",
+      "Bash(git push * origin *:main)",
+      "Bash(git push * origin *:main *)",
+      "Bash(git push origin *:refs/heads/main*)",
+      "Bash(git push * origin *:refs/heads/main*)",
       "Bash(git reset --hard*)",
       "Bash(git branch -D *)",
       "Bash(gh pr merge*)",
@@ -148,6 +157,7 @@
       }
     ]
   },
+  "disableClaudeAiConnectors": true,
   "enabledPlugins": {
     "ast-grep@simlock-pinned": true
   },

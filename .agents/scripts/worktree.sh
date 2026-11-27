@@ -132,7 +132,8 @@ if git -C "$main_root" show-ref --verify --quiet "refs/heads/$branch"; then
 elif git -C "$main_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
   git -C "$main_root" worktree add -q --track -b "$branch" "$dir" "origin/$branch" >&2
 else
-  git -C "$main_root" worktree add -q -b "$branch" "$dir" "$base" >&2
+  # why: a branch that tracks its base is pushed onto the base when `push.default` is `upstream`.
+  git -C "$main_root" worktree add -q --no-track -b "$branch" "$dir" "$base" >&2
 fi
 prepare "$dir"
 
