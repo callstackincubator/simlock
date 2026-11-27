@@ -278,6 +278,8 @@ describe("startDaemon in gateway mode host load", () => {
 
   const statusOf = async (daemon: DaemonServer) =>
     (await daemon.dispatch("status.get", {}, operator)) as Record<string, unknown>;
+  // why: three times the 5 s the Windows probe gives its page-file query.
+  const FIRST_REAL_READING_MS = 15_000;
 
   it("a gateway started with a probe answers status.get with the gateway machine's load from it", async () => {
     const probe = new FakeHostLoadProbe(COUNTERS);
@@ -308,12 +310,18 @@ describe("startDaemon in gateway mode host load", () => {
     );
     runningDaemons.push(daemon);
 
+    // why: the first reading comes when the probe's slowest part ends: on Windows a PowerShell
+    // start, which the probe gives 5 s and then leaves memory out. Disk is the part every host's
+    // probe reads without a child process, so it is there whatever the query did.
     await expect
       .poll(
-        async () => ((await statusOf(daemon)).load as { memory?: { totalBytes: number } })?.memory,
+        async () => ((await statusOf(daemon)).load as { disk?: { totalBytes: number } })?.disk,
+        {
+          timeout: FIRST_REAL_READING_MS,
+        },
       )
       .toMatchObject({ totalBytes: expect.any(Number) });
-  });
+  }, 30_000);
 
   it("a gateway that lost the start race leaves no host load timer pending", async () => {
     const first = await startGateway({ hostLoadProbe: null });

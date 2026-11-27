@@ -907,12 +907,18 @@ describe("WindowsHostLoadProbe", () => {
 });
 
 // why: what a failed or empty page-file query prints is PowerShell's behaviour, which only the real
-// query shows; the runner rewrites the query to make it fail or find no page file.
+// query shows; the runner rewrites the query to make it fail or find no page file. It also gives
+// the query longer than the probe does: these tests claim what PowerShell prints, not how fast,
+// and its first start on a loaded CI runner has taken more than the probe's 5 s.
+const REAL_QUERY_TIMEOUT_MS = 45_000;
+const REAL_QUERY = { timeout: 60_000 };
+
 describe.runIf(process.platform === "win32")("WindowsHostLoadProbe on Windows", () => {
   function realProbe(rewrite: (arg: string) => string = (arg) => arg): WindowsHostLoadProbe {
     const node = new NodeProcessRunner();
     const processRunner: ProcessRunner = {
-      run: (command, args, options) => node.run(command, args.map(rewrite), options),
+      run: (command, args, options) =>
+        node.run(command, args.map(rewrite), { ...options, timeoutMs: REAL_QUERY_TIMEOUT_MS }),
       spawn: (command, args, options) => node.spawn(command, args.map(rewrite), options),
       spawnStreaming: (command, args, options) =>
         node.spawnStreaming(command, args.map(rewrite), options),
@@ -928,21 +934,25 @@ describe.runIf(process.platform === "win32")("WindowsHostLoadProbe on Windows", 
     });
   }
 
-  it("reads swap from the real page-file query as whole MiB", async () => {
+  it("reads swap from the real page-file query as whole MiB", REAL_QUERY, async () => {
     const counters = await realProbe().read();
 
     expect(Number.isInteger((counters.memory?.swapUsedBytes ?? -1) / MIB)).toBe(true);
   });
 
-  it("leaves memory out when the page-file query itself fails, rather than reporting no swap", async () => {
-    const counters = await realProbe((arg) =>
-      arg.replace("Win32_PageFileUsage", "Win32_NoSuchClass"),
-    ).read();
+  it(
+    "leaves memory out when the page-file query itself fails, rather than reporting no swap",
+    REAL_QUERY,
+    async () => {
+      const counters = await realProbe((arg) =>
+        arg.replace("Win32_PageFileUsage", "Win32_NoSuchClass"),
+      ).read();
 
-    expect(counters.memory).toBeUndefined();
-  });
+      expect(counters.memory).toBeUndefined();
+    },
+  );
 
-  it("reports no swap used when the query finds no page file", async () => {
+  it("reports no swap used when the query finds no page file", REAL_QUERY, async () => {
     const counters = await realProbe((arg) =>
       arg.replace("Get-CimInstance Win32_PageFileUsage", "@()"),
     ).read();
