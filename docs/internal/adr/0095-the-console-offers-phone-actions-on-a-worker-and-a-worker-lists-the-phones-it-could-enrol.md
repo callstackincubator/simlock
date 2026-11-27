@@ -1,6 +1,6 @@
 # 0095. The console offers phone actions on a worker, and a worker lists the phones it could enrol
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-27
 - **Feature:** #1131 (request #1130). The operation's shape, the
   messages, the limits and the console's words are in the feature's
