@@ -9,10 +9,11 @@
 // any checkout or worktree). The manuals sent are the AGENTS.md of each folder from the top one
 // down to the path's own, read from the checkout the path names: a relative path resolves
 // against the call's `cwd`, which a leading `cd <dir> &&` moves. The root AGENTS.md is never
-// sent: the harness loads it.
+// sent: it is a map, not a module manual, and an agent that needs it opens it.
 //
-// Two roles get none, for they neither edit nor judge code: the `reviewer` and
-// `hardware-verifier` agents, and a main session from the moment it starts the `deliver` skill.
+// Three callers get none: the `reviewer` coordinator and the `hardware-verifier` agent, which
+// edit no code and read no module's source in a normal run, and a main session from the moment
+// it starts the `deliver` skill.
 // Nothing in a hook's input names a session's skill, so the transcript is read for it: the Skill
 // tool's call, or the `/deliver` command a person typed.
 //
