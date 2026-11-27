@@ -28,12 +28,22 @@ as `refs/replay/<PR>/...` on origin, `review-replay.sh` builds the blind
 inputs for that snapshot and prints the reviewer's prompt (tagged
 `stage=replay`, or one lens with `--lens`), and `review-score.mjs` scores
 the findings against the ledger and appends to `.agents/replay/results.jsonl`.
+
+`replay-freeze.mjs --escaped <file>` adds the bugs a round's review let
+through to the pinned truth: the bug's issue, its fix commit, and the file
+and lines of the reviewed head that held the defect. Record one only after
+reading its fix: `git blame` names the last PR to touch a line, not the one
+that made the defect. `review-score.mjs` reports recall on escaped bugs as
+its own number: a bug is found only when a blocking finding names its file
+and a line or range that overlaps those lines. Round 1 of #1210, #1235, #1626, #1446 and
+#1620 holds 13 such entries for 12 bugs; #1360, #752 and #775 hold none.
+
 A change to the review is judged by replaying each variant on every
 snapshot, three runs each. It is adopted when, against the current agents
-on the same snapshots, recall over fixed findings does not drop, unmatched
-findings (after adjudication) do not rise, and the number it targets
-(minutes, USD, open rate, rule-cited findings) moves by the amount it
-claims. Unknown data does not count as improvement.
+on the same snapshots, recall over fixed findings and recall on escaped
+bugs do not drop, unmatched findings (after adjudication) do not rise, and
+the number it targets (minutes, USD, open rate, rule-cited findings) moves
+by the amount it claims. Unknown data does not count as improvement.
 
 The design follows [Anthropic's review convergence findings](https://claude.dev/blog/solving-code-review-at-anthropic/),
 [Addy Osmani's risk-focused review](https://addyosmani.com/blog/agentic-code-review/),

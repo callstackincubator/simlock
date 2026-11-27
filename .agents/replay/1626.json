@@ -1,0 +1,22 @@
+{
+  "pr": 1626,
+  "issue": 1570,
+  "rounds": {
+    "1": {
+      "head": "3c09207d51a719c770b9cc56fb874323955d98d2",
+      "base": "31359f6fb7d9a103e4bd168d99ee13c91c451a3b",
+      "frozenAt": "2026-11-27T10:44:15.227Z",
+      "baseline": {
+        "runs": 4,
+        "seconds": 1903,
+        "costUsd": 3.4123,
+        "lenses": [
+          "reviewer/-:claude-sonnet-5-5",
+          "spec/-:claude-sonnet-5-5",
+          "code/both:claude-opus-5-5",
+          "claims/-:claude-sonnet-5-5"
+        ]
+      }
+    }
+  }
+}

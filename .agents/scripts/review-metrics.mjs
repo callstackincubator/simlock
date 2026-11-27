@@ -17,7 +17,15 @@
 // --findings validates the coordinator's findings file (`{"findings": [...]}`, each with id,
 // role, class, outcome, path and, when present, round) and adds the outcome and class counts. --json prints the ledger
 // (runs, totals, findings) instead of the summary lines.
-import { readFileSync } from "node:fs";
+//
+// It also normalises each class and writes the file back when one changed, so the ledger counts
+// one rule as one class: a class that starts with a rule file's name (docs/internal/agent-rules/)
+// and a rule number becomes `<rule file> <n>`, and the words after it move to `detail`
+// (`testing 3: error path` is class `testing 3`, detail `error path`). A class that names a rule
+// file with no number, alone or before a colon, is refused.
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parsed, projectsRoot, tagOf, transcripts } from "./transcripts.mjs";
 import { option } from "./cli-args.mjs";
 
@@ -51,8 +59,7 @@ const runs = transcripts(root)
   .filter(({ tag }) => (tag.stage === "replay") === args.includes("--replay"))
   .map(({ file, tag }) => run(file, tag))
   .sort((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""));
-const findings =
-  findingsFile === null ? null : checked(JSON.parse(readFileSync(findingsFile, "utf8")));
+const findings = findingsFile === null ? null : normalised(findingsFile);
 
 const total = (values) =>
   values.length === 0 || values.some((v) => v === null)
@@ -151,6 +158,60 @@ function priced(model, counts, sofar) {
   const price = PRICES[model];
   if (price === undefined) return null;
   return sofar + counts.reduce((sum, n, i) => sum + n * price[i], 0) / 1e6;
+}
+
+function normalised(path) {
+  const text = readFileSync(path, "utf8");
+  const file = JSON.parse(text);
+  const list = checked(file);
+  const rules = ruleFiles();
+  let changed = false;
+  for (const f of list) {
+    const { class: name, detail } = classOf(f, rules);
+    if (name === f.class) continue;
+    changed = true;
+    f.class = name;
+    if (detail !== undefined) f.detail = f.detail === undefined ? detail : `${detail}; ${f.detail}`;
+  }
+  if (changed) writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`);
+  return list;
+}
+
+function ruleFiles() {
+  const dir = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "docs/internal/agent-rules",
+  );
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => name.slice(0, -3));
+  } catch {
+    return [];
+  }
+}
+
+function classOf(finding, rules) {
+  const text = finding.class.trim().replace(/\s+/g, " ");
+  const lower = text.toLowerCase();
+  // why: the longest name first, so no rule file is read as the start of another's name.
+  const rule = [...rules]
+    .sort((x, y) => y.length - x.length)
+    .find((name) => lower.startsWith(name) && !/^[\w.-]/.test(lower.slice(name.length)));
+  if (rule === undefined) return { class: text };
+  const rest = text.slice(rule.length);
+  const numbered = /^(?: rule)? ?#? ?(\d+)(?!\d)(.*)$/i.exec(rest);
+  if (numbered !== null) {
+    const detail = numbered[2].replace(/^[\s:;,.()/-]+/, "").trim();
+    return { class: `${rule} ${Number(numbered[1])}`, ...(detail === "" ? {} : { detail }) };
+  }
+  // why: a rule file's name then plain words ("documentation contradicts code") is the general rule in the lens's own words.
+  if (/^ (?!rule\b)[a-z]/i.test(rest)) return { class: text };
+  throw new Error(
+    `finding ${finding.id} has class "${finding.class}", which names the rule file ${rule} and no rule number. Accepted: "${rule} <n>", "${rule} <n>: <detail>" (as in "testing 3: error path"), or the general rule in at most 8 words that do not start with "${rule}:"`,
+  );
 }
 
 function checked(file) {
