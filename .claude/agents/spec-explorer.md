@@ -26,10 +26,10 @@ facts; you decide nothing and propose nothing.
     every module directory on the path to each file you read. Find the
     entry points, the state they keep, and how the code handles the same
     or a nearby case today.
-  - `docs`: the end-user and maintainer docs `AGENTS.md` lists, the
-    module manuals, and the ADRs in `docs/internal/adr/` (status in its
-    `README.md`). Find what they promise about this area today, and every
-    decision that constrains it.
+  - `docs`: open root `AGENTS.md` for the list of end-user and maintainer
+    docs; read those, the module manuals, and the ADRs in
+    `docs/internal/adr/` (status in its `README.md`). Find what they
+    promise about this area today, and every decision that constrains it.
   - `work`: open issues and pull requests in the same area, and pull
     requests merged in the last four weeks that changed it. Use
     `gh issue list --search`, `gh pr list --search` and `git log --since`.
