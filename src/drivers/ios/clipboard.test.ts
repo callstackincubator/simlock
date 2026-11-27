@@ -307,7 +307,7 @@ describe("IosSimctlDriver Simulator.app clipboard advisory", () => {
     // why: Simulator.app syncs the Mac clipboard into every simulator it attaches to, whatever DeviceHub's pasteboardSyncEnabled says (#1580).
     let simulatorPids = "75224\n";
     const answer = (command: string, args: readonly string[]) => {
-      const pgrepsSimulator = /(^|\/)pgrep$/.test(command) && args.includes("Simulator");
+      const pgrepsSimulator = command === "/usr/bin/pgrep" && args.join(" ") === "-x Simulator";
       if (!pgrepsSimulator) return { code: 1, stderr: `unexpected ${command}`, stdout: "" };
       return { code: simulatorPids === "" ? 1 : 0, stderr: "", stdout: simulatorPids };
     };

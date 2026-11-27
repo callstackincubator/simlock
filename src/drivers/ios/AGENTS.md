@@ -25,15 +25,15 @@ Resolve and boot:
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step.
 - Volume (`ios.simulator.audio: false`): apps play at volume 0. A baseline source is not silenced.
 - Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and leaves started devices running when it quits. Only a non-zero exit of that open means it is missing: Simulator.app is then opened, detached.
-- Simulator.app syncs the clipboard past DeviceHub's setting: under `default`, `advisories()` warns while it runs.
+- Simulator.app syncs the clipboard past DeviceHub's setting.
 
 Seeds (ADR 0061):
 
 - A simulator is a clone of its kind's seed. A seed is known by its `ios_source_data` row, never by name, and lives in the sources set: `sources` in the owned set, an owned root of its own under `default`. It is in no `listManaged` or `simlock simctl list`.
-- A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is booted once, shut down, cloned unbooted into the sources set, then deleted with its log folder; `saveSource` deletes the saved-from lease's log folder too. An undeletable log folder is logged; an undeletable throwaway fails the make.
+- A seed is made from a throwaway (ADR 0076): `simlock-seed-<id>` is booted once, shut down, cloned unbooted into the sources set, then deleted with its log folder; `saveSource` deletes the saved-from lease's log folder too. A log folder that cannot be deleted is logged; a throwaway that cannot fails the make.
 - A source records its lineage and, in `ios_source_files`, the files and links naming it, after flushing its WALs. A clone keeps its source's lineage and, before its first boot, has its `com.apple.LaunchServices-*.csstore` deleted and those files and links swapped to its own UDID; a failed drop or swap deletes it. No lineage: a seed is remade, a baseline stale.
 - Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
-- A settle (ADR 0090) swaps a ready quick seed for its idle copy; an undeletable simulator keeps a `making` row for the next start's sweep.
+- A settle (ADR 0090) swaps a ready quick seed for its idle copy; a simulator it cannot delete keeps a `making` row for the next start's sweep.
 - A `clone` or `create` waits `ios.simulator.createTimeoutMs`. At the limit it fails but `simctl` runs on: the UDID it later prints is deleted, the seed's deletion waits for it, and 5 silent minutes more kills and logs it.
 - A `making` row of another process is swept at the first `listSources`, with its throwaway; one of this process, once older than any make takes, at the next make of its kind, never a settle's (`settle_of`).
 - A seed `simctl delete` calls `Invalid device` is gone: its row is dropped. `removeComponent` deletes the runtime's seeds first, then its settle rows.
@@ -54,12 +54,12 @@ Tunnels (`device-tcp.ts`):
 
 - **A restart between `simctl clone` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `simctl delete`.
 - **Runtime downloads outlive deletion (#79).** Reclaim them in Xcode → Settings → Platforms.
-- **Slim costs (#87, #172).** Below iOS 18.5 slim gets `full`. Slim devices lose push, Spotlight, StoreKit, universal links, Siri, iCloud sync.
-- **The overrides file is undocumented.** If Apple ignores it, readback grants `full`.
+- **Slim costs (#87, #172).** Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight, StoreKit, universal links, Siri, iCloud sync; use `--mode full`.
+- **The overrides file is undocumented.** If Apple ignores it, the readback grants `full`.
 - **A recovered slim device runs full but is recorded `slim` (#174)** until its next `makeReady`.
-- **A cold slim lease takes a full cold boot;** MCP needs a longer timeout.
-- **A screen stream can freeze after a reboot under its lease:** reopen the Screen tab.
-- **An iPhone's rotation is unproven on hardware**; a Duo's panel switch is proven.
+- **A cold slim lease takes a full cold boot;** MCP clients need a longer timeout.
+- **A screen stream can freeze after a reboot under its lease:** the capture checks the boot only at start; reopen the Screen tab.
+- **An iPhone's rotation has not run on hardware**; only a Duo's panel switch is proven.
 - **A foldable's stream follows SpringBoard's `DisplayContentMode` log** (ADR 0075): another wording leaves it, and taps, on the panel picked at open; a tap between a fold and the new size lands on the old panel.
 - **A capture killed by SIGKILL cannot stop its CoreDevice stream**, and neither can a stop while `startMediaStream` runs past its limit.
 - **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked against it and the pin moves.
