@@ -82,8 +82,8 @@ targets that branch. The PR body, in this order: `Closes #<N>`; a
 as an unchecked list, in the issue's words; `## Assumptions` ("none", or one `- Assumption:` line
 per gap); the line `*Written by an agent.*`. Keep it current as you go.
 
-- Every test command runs in the foreground with `timeout: 600000` set on
-  the Bash call, and nothing is left running: no `run_in_background`, no
+- Every test command runs in the foreground, and nothing is left running:
+  no `run_in_background`, no
   trailing `&`, no loop that sleeps, no bare `cat > file`. The tool guard
   refuses each; a background job would hold your report until it ends or
   hits its 30-minute cap, which stalls the whole delivery.
