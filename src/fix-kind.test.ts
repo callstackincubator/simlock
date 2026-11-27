@@ -41,6 +41,17 @@ const NUMBERS = PR_TEST.replace("= 20;", "= 60;")
   .replace("1, 2]", "1, 3]");
 const UNSURE = "more than a number outside strings and comments changed";
 
+// why: a conflict makes git exit 1 with the merge left open, which each case then resolves and
+// commits; the identity is given here because CI's git has none, and a merge refuses without one.
+function mergeMain(dir: string): void {
+  spawnSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-commit", "--no-ff", "main"],
+    { cwd: dir },
+  );
+  execFileSync("git", ["rev-parse", "--verify", "-q", "MERGE_HEAD"], { cwd: dir });
+}
+
 interface Finding {
   readonly id: string;
   readonly outcome: string;
@@ -99,7 +110,7 @@ describe("fix-kind.mjs", { timeout: 60_000 }, () => {
   ])("passes a merge of a base that %s", (_, line, byMain) => {
     const { check, dir, git, onMain } = repository();
     onMain({ [SOURCE]: BASE_SOURCE.replace(line, byMain) });
-    spawnSync("git", ["merge", "-q", "--no-commit", "--no-ff", "main"], { cwd: dir });
+    mergeMain(dir);
     writeFileSync(join(dir, SOURCE), PR_SOURCE.replace(line, byMain));
     git("add", ".");
     git("commit", "-qm", "merge");
@@ -194,7 +205,7 @@ describe("fix-kind.mjs", { timeout: 60_000 }, () => {
   it("sends a merge whose conflict resolution rewrote the PR's line to the fix-check", () => {
     const { check, dir, git, onMain } = repository();
     onMain({ [SOURCE]: BASE_SOURCE.replace("two", "two by main") });
-    spawnSync("git", ["merge", "-q", "--no-commit", "--no-ff", "main"], { cwd: dir });
+    mergeMain(dir);
     writeFileSync(join(dir, SOURCE), BASE_SOURCE.replace("two", "two by both"));
     git("add", ".");
     git("commit", "-qm", "merge");
