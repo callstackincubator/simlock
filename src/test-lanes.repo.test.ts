@@ -163,6 +163,18 @@ function ciJobs(ci: string): ReadonlyMap<string, string> {
   return jobs;
 }
 
+function runScript(job: string): string {
+  const body = /\n {8}run: \|\n((?: {10}[^\n]*\n?)+)/.exec(job)?.[1] ?? "";
+  return body.replace(/^ {10}/gm, "");
+}
+
+/** why: Quality and Console each run one script over the results of the jobs they need. */
+function verdictOf(job: string, results: string): number | null {
+  return spawnSync("bash", ["-c", runScript(job)], {
+    env: { PATH: process.env["PATH"] ?? "", RESULTS: results },
+  }).status;
+}
+
 // why: the lane holds only what needs a real daemon or a real browser engine, about four
 // minutes of one runner's two workers, so two shards keep each well inside the job timeout.
 const CONSOLE_SHARDS_AT_LEAST = 2;
@@ -199,12 +211,8 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
     expect(requiredId).not.toBe(laneId);
     expect(requiredJob).toMatch(new RegExp(`\\n {4}needs: \\[[^\\]]*\\b${laneId}\\b`));
     expect(requiredJob).toMatch(/\n {4}if: (\$\{\{ )?always\(\)/);
-    const body = /\n {8}run: \|\n((?: {10}[^\n]*\n?)+)/.exec(requiredJob)?.[1] ?? "";
-    expect(body, "the Console job's run script").not.toBe("");
-    const verdict = (results: string) =>
-      spawnSync("bash", ["-c", body.replace(/^ {10}/gm, "")], {
-        env: { PATH: process.env["PATH"] ?? "", RESULTS: results },
-      }).status;
+    expect(runScript(requiredJob), "the Console job's run script").not.toBe("");
+    const verdict = (results: string) => verdictOf(requiredJob, results);
     expect(verdict("success skipped success"), "every need passed or was skipped").toBe(0);
     for (const bad of ["success failure", "cancelled", "skipped failure skipped"]) {
       expect(verdict(bad), `results ${bad}`).toBe(1);
@@ -245,20 +253,20 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
     expect(attributes.split("\n")).toContain("* text=auto eol=lf");
   });
 
-  it("runs on every push to main, and on a pull request unless it changes no source, test, script or root build file; a Changes job that failed runs it", () => {
+  it("runs on every push to main, and on a pull request unless it changes no source, test, script or root build file; a Changes job that failed runs it; skipped, it leaves `Quality` green, and failed or cancelled it fails `Quality`", () => {
     const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
     const jobs = ciJobs(ci);
     const windows = jobs.get("windows-unit") ?? "";
     const changes = jobs.get("changes") ?? "";
-    const body = /\n {8}run: \|\n((?: {10}[^\n]*\n?)+)/.exec(changes)?.[1] ?? "";
-    expect(body, "the Changes job's run script").not.toBe("");
+    const quality = jobs.get("quality") ?? "";
+    expect(runScript(changes), "the Changes job's run script").not.toBe("");
     // why: the script reads the changed files from git and writes its answer to a file; here
     // git prints the list under test and the file is printed when the script ends.
     const script = [
       `git() { printf '%s\\n' "$CHANGED"; }`,
       `GITHUB_OUTPUT=$(mktemp)`,
       `trap 'cat "$GITHUB_OUTPUT"; rm -f "$GITHUB_OUTPUT"' EXIT`,
-      body.replace(/^ {10}/gm, ""),
+      runScript(changes),
     ].join("\n");
     const answer = (event: string, changed: readonly string[]) => {
       const run = spawnSync("bash", ["-c", script], {
@@ -305,6 +313,12 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
       ".github/workflows/ci.yml",
     ]) {
       expect(answer("pull_request", ["docs/internal/DELIVERY.md", run]), run).toBe("true");
+    }
+
+    expect(quality).toMatch(/\n {4}if: (\$\{\{ )?always\(\)/);
+    expect(verdictOf(quality, "success success skipped success"), "skipped").toBe(0);
+    for (const bad of ["success success failure success", "success cancelled success"]) {
+      expect(verdictOf(quality, bad), `results ${bad}`).toBe(1);
     }
   });
 });
