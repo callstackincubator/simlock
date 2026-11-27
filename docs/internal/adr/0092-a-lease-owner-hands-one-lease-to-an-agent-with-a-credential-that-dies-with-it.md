@@ -108,9 +108,10 @@ of requesting one, and forwards the allocate on the device that lease
 holds, as it already does when it allocates again after agent-device
 forgot a lease. An open with any other lease id is refused, with a
 message that names the handed-over lease. A call that names another lease is refused, and
-a call that names none is held to the credential's lease. `close`
-releases the agent-device lease and leaves the simlock lease to its
-owner.
+a call that names none is held to the credential's lease. `close` ends
+the simlock lease too, as it does for a lease the front made: either
+side may end a handed-over lease, the owner with `lease release` and the
+agent with `close` or `lease release`.
 
 ### 5. A gateway makes and checks its own
 
