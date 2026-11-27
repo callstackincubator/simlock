@@ -303,7 +303,7 @@ describe("IosSimctlDriver DeviceHub clipboard", () => {
 });
 
 describe("IosSimctlDriver Simulator.app clipboard advisory", () => {
-  it("under deviceSet default, advisories() warns while Simulator.app is running and says nothing once it has quit", async () => {
+  it("under deviceSet default, advisories() warns while Simulator.app is running and says nothing once it has quit; under simlock it never warns", async () => {
     // why: Simulator.app syncs the Mac clipboard into every simulator it attaches to, whatever DeviceHub's pasteboardSyncEnabled says (#1580).
     let simulatorPids = "75224\n";
     const answer = (command: string, args: readonly string[]) => {
@@ -315,23 +315,25 @@ describe("IosSimctlDriver Simulator.app clipboard advisory", () => {
       new ScriptedProcessRunner([
         { match: { args: [...args], command }, result: answer(command, args) },
       ]).spawn(command, args, options);
-    const driver = await IosSimctlDriver.create({
-      database: await memorySourceDatabase(),
-      clock: new FakeClock(),
-      coreSimulatorRoot: "/Users/u/Library/Developer/CoreSimulator",
-      driverConfig: { deviceSet: "default" },
-      filesystem: new MemoryFilesystem(),
-      idGenerator: { generate: () => "device-1" },
-      instanceId,
-      processRunner: {
-        run: (command, args, options) => spawn(command, args, options).wait(),
-        spawn,
-        spawnStreaming: () => {
-          throw new Error("the driver streams nothing here");
+    const create = async (driverConfig: Readonly<Record<string, string>>) =>
+      IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        clock: new FakeClock(),
+        coreSimulatorRoot: "/Users/u/Library/Developer/CoreSimulator",
+        driverConfig,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: {
+          run: (command, args, options) => spawn(command, args, options).wait(),
+          spawn,
+          spawnStreaming: () => {
+            throw new Error("the driver streams nothing here");
+          },
         },
-      },
-      simlockHome: "/home/.simlock",
-    });
+        simlockHome: "/home/.simlock",
+      });
+    const driver = await create({ deviceSet: "default" });
 
     await expect(driver.advisories()).resolves.toEqual([
       {
@@ -342,5 +344,9 @@ describe("IosSimctlDriver Simulator.app clipboard advisory", () => {
 
     simulatorPids = "";
     await expect(driver.advisories()).resolves.toEqual([]);
+
+    simulatorPids = "75224\n";
+    const owned = await create({ deviceRoot: "/home/.simlock/devices/ios" });
+    await expect(owned.advisories()).resolves.toEqual([]);
   });
 });
