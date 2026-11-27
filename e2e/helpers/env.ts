@@ -226,6 +226,8 @@ const STANDALONE_OFF: Record<string, unknown> = {
   http: { enabled: false },
   // why: the e2e flows wait for a refill right after a grant; the wait itself is proven at the WarmPool seam.
   warmPool: { refillDelayMs: 0 },
+  // why: a worker reads this host's memory (ADR 0068) and at `warming-paused` starts no warm spare, so a test that waits for one times out on a loaded host (#1891).
+  memoryPressure: { enabled: false },
 };
 
 function seedConfig(
