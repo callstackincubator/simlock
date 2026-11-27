@@ -142,9 +142,9 @@ gh issue view <N> --json number,title,labels,assignees,body
 - `feature:planned`: walk its open sub-issues (step 3).
 - `bug:new`, unassigned: triage, then the fast track (delivery rules 8
   and 17). With no triage report on the thread, or a person's reply newer
-  than the last one, run the `triage-bug` procedure: start one
-  `bug-triager` in the background with the issue number and wait for its
-  report. Then, unless the run was started with `no-fast-track`:
+  than the last one, start one `bug-triager` in the background with the
+  issue number and wait for its report. Then, unless the run was started
+  with `no-fast-track`:
 
   ```bash
   node .agents/scripts/fast-track.mjs <N>
