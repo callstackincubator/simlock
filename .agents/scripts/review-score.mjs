@@ -8,7 +8,14 @@
 // matches a ground-truth one when both name the same file (the path before any `:line`) and
 // share a class word, or when the file has exactly one ground-truth finding of that role. Recall
 // is matched defects over defects; a replay finding matching nothing is `unmatched` and needs a
-// person's adjudication (new true finding, or false positive). Cost and seconds come from the
+// person's adjudication (new true finding, or false positive).
+//
+// Escaped bugs (the truth blob's `escaped`, from replay-freeze.mjs --escaped) are scored apart
+// from the ledger findings, as their own recall: a bug is found only when a replay finding the
+// review would block on (`open`, `fixed` or `duplicate`) names one of its places, the file and
+// a line or range that overlaps the place's lines. A finding that names the file with no line,
+// or as a note or a rejected candidate, is printed for a person and not counted. A finding that
+// finds an escaped bug is never `unmatched`. Cost and seconds come from the
 // stage=replay runs review-metrics.mjs --replay reports, from --since on (the `started:` line
 // review-replay.sh printed), so replays of one snapshot stay apart. One row goes to
 // .agents/replay/results.jsonl.
@@ -52,12 +59,15 @@ const replay = file.endsWith(".json")
 execFileSync("git", ["fetch", "-q", "origin", `+refs/replay/${pr}/truth:refs/replay/${pr}/truth`], {
   cwd: root,
 });
-const truthFindings = JSON.parse(
+const truthBlob = JSON.parse(
   execFileSync("git", ["cat-file", "-p", `refs/replay/${pr}/truth`], {
     cwd: root,
     encoding: "utf8",
   }),
-).findings;
+);
+const truthFindings = truthBlob.findings;
+// why: a place's lines are those of the head its round reviewed, so another round cannot be scored on them.
+const escapedBugs = (truthBlob.escaped ?? []).filter((e) => String(e.round) === String(round));
 
 // why: a finding may name several places, "a.ts:12 (and b.ts:40, c.ts:7)", and each counts.
 const filesOf = (p) => [...String(p ?? "").matchAll(/[\w@./-]+\.[a-z]+/g)].map((m) => m[0]);
@@ -109,6 +119,47 @@ const overlap = (a, b) => {
   return [...ra].some((r) => rb.has(r));
 };
 
+// why: "a.ts:12", "a.ts:12-20" and "a.ts:12,40" each name lines of a.ts; a file with no number names none.
+const placesOf = (p) =>
+  [...String(p ?? "").matchAll(/([\w@./-]+\.[a-z]+)(?::(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*))?/g)].map(
+    (m) => ({
+      file: m[1],
+      ranges: (m[2] ?? "")
+        .split(",")
+        .filter(Boolean)
+        .map((r) => r.split("-").map(Number))
+        .map(([from, to = from]) => [from, to]),
+    }),
+  );
+const BLOCKING = ["open", "fixed", "duplicate"];
+// why: a lens often names a file by its basename alone ("main.ts:1177").
+const sameFile = (place, named) =>
+  place.file === named.file || place.file.endsWith(`/${named.file}`);
+const escapedHits = new Map(escapedBugs.map((e) => [e.bug, { found: [], seen: [] }]));
+const foundEscaped = new Set();
+for (const r of replay) {
+  for (const bug of escapedBugs) {
+    const named = placesOf(r.path).filter((p) => bug.places.some((b) => sameFile(b, p)));
+    if (named.length === 0) continue;
+    const onLines = named.some((p) =>
+      bug.places.some(
+        (b) => sameFile(b, p) && p.ranges.some(([from, to]) => from <= b.end && to >= b.start),
+      ),
+    );
+    if (onLines && BLOCKING.includes(r.outcome)) {
+      escapedHits.get(bug.bug).found.push(r.id);
+      foundEscaped.add(r.id);
+    } else {
+      const why = onLines
+        ? r.outcome
+        : named.some((p) => p.ranges.length > 0)
+          ? "other lines"
+          : "no line";
+      escapedHits.get(bug.bug).seen.push(`${r.id} (${why})`);
+    }
+  }
+}
+
 const truth = truthFindings.map((f) => ({
   ...f,
   files: filesOf(f.path),
@@ -134,7 +185,7 @@ for (const r of replay) {
   if (hit) {
     taken.add(hit.id);
     matches.push({ replay: r.id, truth: hit.id, truthOutcome: hit.outcome });
-  } else unmatched.push(r);
+  } else if (!foundEscaped.has(r.id)) unmatched.push(r);
 }
 // why: a single lens is judged on the findings its role owned in the real review, and a later
 // round on the findings that round raised, when the ledger says which round that was.
@@ -197,6 +248,20 @@ console.log(
 console.log(
   `Replay runs ${runs.runs}, seconds ${show(runs.seconds)}, USD ${show(runs.costUsd)}; real review: runs ${show(baseline?.runs)}, seconds ${show(baseline?.seconds)}, USD ${show(baseline?.costUsd)}.`,
 );
+const escapedFound = escapedBugs.filter((e) => escapedHits.get(e.bug).found.length > 0);
+const escapedMissed = escapedBugs.filter((e) => escapedHits.get(e.bug).found.length === 0);
+if (escapedBugs.length > 0) {
+  console.log(`Escaped bugs: recall ${escapedFound.length}/${escapedBugs.length}.`);
+  const where = (e) => e.places.map((p) => `${p.file}:${p.start}-${p.end}`).join(", ");
+  for (const e of escapedFound)
+    console.log(`  escaped #${e.bug} found by ${escapedHits.get(e.bug).found.join(", ")}`);
+  for (const e of escapedMissed) {
+    const seen = escapedHits.get(e.bug).seen;
+    console.log(
+      `  ESCAPED #${e.bug} missed ${where(e)}${seen.length === 0 ? "" : `; same file: ${seen.join(", ")} (adjudicate)`}`,
+    );
+  }
+}
 for (const m of matches) console.log(`  match ${m.replay} -> ${m.truth} (${m.truthOutcome})`);
 for (const t of missed) console.log(`  MISSED ${t.id} ${t.role} [${t.class}] ${t.path}`);
 for (const r of unmatched)
@@ -218,6 +283,13 @@ appendFileSync(
     missed: missed.map((t) => t.id),
     unmatched: unmatched.map((r) => `${r.id} ${r.path} [${r.class}]`),
     nonDefectHits: nonDefectHits.length,
+    ...(escapedBugs.length === 0
+      ? {}
+      : {
+          escapedRecall: `${escapedFound.length}/${escapedBugs.length}`,
+          escapedFound: escapedFound.map((e) => e.bug),
+          escapedMissed: escapedMissed.map((e) => e.bug),
+        }),
     replay: runs,
     baseline: baseline ?? null,
   }) + "\n",
