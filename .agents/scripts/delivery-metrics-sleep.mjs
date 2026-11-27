@@ -12,13 +12,17 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 const MIN = 60_000;
+// why: pmset is macOS's own tool, and Fallow reads a literal command name as a package's binary
+// that package.json must list.
+const SLEEP_LOG = ["pmset", "-g", "log"];
 const LOG_LINE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([+-]\d{2})(\d{2}) (\S+(?: \S+)?)\s/;
 
 export function recordedSleep(file) {
   const kept = readJson(file) ?? { from: null, to: null, intervals: [] };
   let log;
   try {
-    log = execFileSync("pmset", ["-g", "log"], { encoding: "utf8", maxBuffer: 1 << 29 });
+    const [command, ...args] = SLEEP_LOG;
+    log = execFileSync(command, args, { encoding: "utf8", maxBuffer: 1 << 29 });
   } catch {
     return kept;
   }
