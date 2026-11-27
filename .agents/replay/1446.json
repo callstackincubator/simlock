@@ -1,0 +1,17 @@
+{
+  "pr": 1446,
+  "issue": 1433,
+  "rounds": {
+    "1": {
+      "head": "f3a6f1a27f278e20868ceeb9ab41bd0565a2b1ee",
+      "base": "fc5ac8c3e1d670689cb4eb14396850e7af691ccb",
+      "frozenAt": "2026-11-27T10:44:41.824Z",
+      "baseline": {
+        "runs": 0,
+        "seconds": null,
+        "costUsd": null,
+        "lenses": []
+      }
+    }
+  }
+}
