@@ -126,3 +126,4 @@ the status is stale.
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
 | [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted; narrows 0061 §1 and §2 and 0076 §1 and §2 |
 | [0091](0091-an-operator-names-a-workers-tags-and-a-lease-may-require-them.md) | An operator names a worker's tags, and a lease may require them | Accepted; narrows 0026 §1 and 0030 §5 |
+| [0092](0092-an-enrolled-device-and-a-platforms-virtual-devices-carry-tags-a-lease-may-require.md) | An enrolled device and a platform's virtual devices carry tags a lease may require | Accepted — not yet implemented; narrows 0091 §2 and 0026 §1 |
