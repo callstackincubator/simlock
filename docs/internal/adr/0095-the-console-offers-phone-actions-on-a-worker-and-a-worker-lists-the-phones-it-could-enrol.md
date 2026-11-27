@@ -46,8 +46,10 @@ reason. It is its own operation and route, not a filter of
 with no record is not one.
 
 A phone is left out when a live record holds its id or its hardware
-serial, so the list never offers a phone `device add` would refuse as
-enrolled under another id. A removed phone that is still plugged in is
+serial. One case gets through: a phone enrolled by USB serial and also
+connected over Wi-Fi is listed by its address, since only an inspection
+reads which phone an address is. `device add` then refuses it as enrolled
+under another id, and the console shows that refusal. A removed phone that is still plugged in is
 listed: auto-enroll keeps it out (ADR 0073 §3), but the operator may
 enrol it again.
 
