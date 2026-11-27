@@ -1,6 +1,6 @@
 # 0093. An agent or operator token may carry an expiry
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-27
 - **Feature:** #1895 (request #1407). The flag, the stored column and the
   messages are in the feature's design tables.

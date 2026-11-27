@@ -126,5 +126,5 @@ the status is stale.
 | [0089](0089-an-android-streams-scrcpy-command-line-stays-under-256-bytes.md) | An Android stream's scrcpy command line stays under 256 bytes | Accepted |
 | [0090](0090-a-seed-is-settled-in-the-background-and-replaced-by-its-settled-copy.md) | A seed is settled in the background and replaced by its settled copy | Accepted; narrows 0061 §1 and §2 and 0076 §1 and §2 |
 | [0091](0091-an-operator-names-a-workers-tags-and-a-lease-may-require-them.md) | An operator names a worker's tags, and a lease may require them | Accepted; narrows 0026 §1 and 0030 §5 |
-| [0092](0092-a-lease-owner-hands-one-lease-to-an-agent-with-a-credential-that-dies-with-it.md) | A lease owner hands one lease to an agent with a credential that dies with it | Proposed |
-| [0093](0093-an-agent-or-operator-token-may-carry-an-expiry.md) | An agent or operator token may carry an expiry | Proposed |
+| [0092](0092-a-lease-owner-hands-one-lease-to-an-agent-with-a-credential-that-dies-with-it.md) | A lease owner hands one lease to an agent with a credential that dies with it | Accepted — not yet implemented; narrows 0023 §4 and 0081 §2 |
+| [0093](0093-an-agent-or-operator-token-may-carry-an-expiry.md) | An agent or operator token may carry an expiry | Accepted — not yet implemented; narrows 0081 §2 |

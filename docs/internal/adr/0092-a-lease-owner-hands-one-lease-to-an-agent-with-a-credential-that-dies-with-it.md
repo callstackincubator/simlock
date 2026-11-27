@@ -1,6 +1,6 @@
 # 0092. A lease owner hands one lease to an agent with a credential that dies with it
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-27
 - **Feature:** #1895 (request #1407). The credential's shape, the
   operations it may call, the messages and the stored columns are in the
