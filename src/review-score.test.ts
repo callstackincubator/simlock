@@ -137,7 +137,7 @@ beforeAll(() => {
 });
 
 describe("review-score.mjs", () => {
-  it("counts an escaped bug as found only when a blocking finding names one of its files and a line inside the place", () => {
+  it("counts an escaped bug as found only when a blocking finding names one of its files and a line or range that overlaps the place", () => {
     const { out, row } = score(7, [
       finding("F1", "src/delete.ts:12"),
       finding("F2", "src/copy.ts:30"),

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // `node .agents/scripts/replay-freeze.mjs --pr <M> --round <1|2|fix-check> --head <sha> --base <sha>
-// [--previous <sha>] [--issue <N>] [--escaped <file.json>]`: freezes one review snapshot of a PR so review-replay.sh can
+// [--previous <sha>] [--issue <N>] [--escaped <file.json>] [--replace-truth]`: freezes one review snapshot of a PR so review-replay.sh can
 // review it again later, with today's or tomorrow's agents, and review-score.mjs can score the
 // result against what the real review found.
 //
@@ -20,9 +20,13 @@
 // "note": "<optional>"}]`. A place is the smallest block of the round's head that holds the
 // defect. The fix must be a local commit, every place must exist at the head, and one place of
 // each bug must overlap a line the reviewed diff adds; anything else is refused and nothing is
-// written or pushed. They go into the truth blob under `escaped`, tagged with the round; without
-// --escaped the blob keeps the ones it has. Git refuses to replace a pinned blob: to change the
-// truth of a frozen PR, delete refs/replay/<M>/truth on origin first.
+// written or pushed. They go into the truth blob under `escaped`, tagged with the round; the
+// blob keeps the entries it has for other rounds, and without --escaped this round's too.
+//
+// Git refuses to replace a pinned blob. A freeze whose truth differs from the one on origin is
+// refused, nothing written or pushed, unless --replace-truth is given: the script then deletes
+// refs/replay/<M>/truth and pins the new blob, built from the stored one first. Never delete
+// that ref by hand: a freeze that finds none starts from an empty truth.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -38,7 +42,7 @@ const issue = option("--issue");
 const escapedFile = option("--escaped");
 if (!/^\d+$/.test(pr ?? "") || !round || !head || !base) {
   console.error(
-    "usage: replay-freeze.mjs --pr <M> --round <1|2|fix-check> --head <sha> --base <sha> [--previous <sha>] [--issue <N>] [--escaped <file.json>]",
+    "usage: replay-freeze.mjs --pr <M> --round <1|2|fix-check> --head <sha> --base <sha> [--previous <sha>] [--issue <N>] [--escaped <file.json>] [--replace-truth]",
   );
   process.exit(64);
 }
@@ -133,6 +137,36 @@ try {
   };
 } catch {}
 
+const truthRef = `refs/replay/${pr}/truth`;
+const pinned = git("ls-remote", "origin", truthRef).split(/\s/)[0] || null;
+const stored = pinned === null ? null : storedTruth();
+const allEscaped =
+  escaped === null
+    ? (stored?.escaped ?? [])
+    : [...(stored?.escaped ?? []).filter((e) => e.round !== round), ...escaped];
+let blob = null;
+if (findings !== null || allEscaped.length > 0) {
+  // why: a blob with no `escaped` key is what the earlier snapshots hold, so a freeze that adds
+  // no escaped bug writes the same bytes and replaces nothing.
+  const truth = {
+    pr: Number(pr),
+    findings: findings ?? stored?.findings ?? [],
+    ...(allEscaped.length === 0 ? {} : { escaped: allEscaped }),
+  };
+  blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+    cwd: root,
+    input: JSON.stringify(truth, null, 2) + "\n",
+    encoding: "utf8",
+  }).trim();
+}
+const replaces = pinned !== null && blob !== null && blob !== pinned;
+if (replaces && !process.argv.includes("--replace-truth")) {
+  console.error(
+    `${truthRef} on origin holds ${stored.findings?.length ?? 0} findings and ${stored.escaped?.length ?? 0} escaped bugs, and this freeze would pin ${findings?.length ?? stored.findings?.length ?? 0} and ${allEscaped.length}. Git refuses to replace a pinned blob: run again with --replace-truth, and never delete the ref by hand.`,
+  );
+  process.exit(65);
+}
+
 const dir = join(root, ".agents/replay");
 mkdirSync(dir, { recursive: true });
 const file = join(dir, `${pr}.json`);
@@ -144,27 +178,17 @@ delete snapshot.findings;
 writeFileSync(file, JSON.stringify(snapshot, null, 2) + "\n");
 
 const refs = Object.entries(full).map(([name, sha]) => `${sha}:refs/replay/${pr}/${round}/${name}`);
-const stored = storedTruth();
-const allEscaped =
-  escaped === null
-    ? (stored?.escaped ?? [])
-    : [...(stored?.escaped ?? []).filter((e) => e.round !== round), ...escaped];
-if (findings !== null || allEscaped.length > 0) {
-  // why: a blob with no `escaped` key is what the earlier snapshots hold, and git refuses to
-  // replace a pinned blob, so a freeze that adds no escaped bug must write the same bytes.
-  const truth = {
-    pr: Number(pr),
-    findings: findings ?? stored?.findings ?? [],
-    ...(allEscaped.length === 0 ? {} : { escaped: allEscaped }),
-  };
-  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
-    cwd: root,
-    input: JSON.stringify(truth, null, 2) + "\n",
-    encoding: "utf8",
-  }).trim();
-  refs.push(`${blob}:refs/replay/${pr}/truth`);
+if (blob !== null && blob !== pinned) refs.push(`${blob}:${truthRef}`);
+if (replaces) git("push", "-q", "origin", `:${truthRef}`);
+try {
+  git("push", "-q", "origin", ...refs);
+} catch (error) {
+  if (replaces)
+    console.error(
+      `the old truth is deleted and the new one is not pinned: run \`git push origin ${blob}:${truthRef}\``,
+    );
+  throw error;
 }
-git("push", "-q", "origin", ...refs);
 console.log(
   `frozen PR #${pr} round ${round}: ${Object.entries(full)
     .map(([k, v]) => `${k} ${v.slice(0, 8)}`)
@@ -174,10 +198,8 @@ console.log(
 );
 
 function storedTruth() {
-  const ref = `refs/replay/${pr}/truth`;
-  if (git("ls-remote", "origin", ref) === "") return null;
-  git("fetch", "-q", "origin", `+${ref}:${ref}`);
-  return JSON.parse(git("cat-file", "-p", ref));
+  git("fetch", "-q", "origin", `+${truthRef}:${truthRef}`);
+  return JSON.parse(git("cat-file", "-p", truthRef));
 }
 
 function escapedBugs(list) {

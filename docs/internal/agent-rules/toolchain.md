@@ -322,6 +322,7 @@ ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> ro
 machine and prints their models, seconds, tokens and cost, and with
 `--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
 what goes in the findings file and where the result is posted. With
-`--findings` it writes each class back as rule plus `detail` and refuses a
-class that names no rule number; it checks nothing else. Runs tagged `stage=replay` (a frozen snapshot reviewed
+`--findings` it also checks the findings file and writes a class that
+starts with a rule and its number back as that rule plus `detail`; the
+script's header says what it refuses. Runs tagged `stage=replay` (a frozen snapshot reviewed
 again by `review-replay.sh`) are left out unless `--replay` is given.

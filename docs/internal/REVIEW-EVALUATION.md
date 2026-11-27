@@ -35,7 +35,7 @@ and lines of the reviewed head that held the defect. Record one only after
 reading its fix: `git blame` names the last PR to touch a line, not the one
 that made the defect. `review-score.mjs` reports recall on escaped bugs as
 its own number: a bug is found only when a blocking finding names its file
-and a line inside those lines. Round 1 of #1210, #1235, #1626, #1446 and
+and a line or range that overlaps those lines. Round 1 of #1210, #1235, #1626, #1446 and
 #1620 holds 13 such entries for 12 bugs; #1360, #752 and #775 hold none.
 
 A change to the review is judged by replaying each variant on every
