@@ -237,12 +237,14 @@ Tests that start real simulators or emulators. Run them only through
 - `scripts/slow-e2e.sh check`: the checks a run starts with, without a
   run. Exit 69 with why when the machine is unfit. While a lane runs it
   stops nothing and checks only free disk and the other tools.
+- `scripts/slow-e2e.sh check --fix`: the same, and installs the agent-device
+  version `package.json` pins. With `--dry-run` it only lists what it would do.
 - `scripts/slow-e2e.sh status`: the running test, the counts so far, how
   long the log has been quiet, and each failure. `scripts/slow-e2e.sh stop`
   ends the running lane and what it started.
 - This machine's settings live in `.slow-lane.env` at the main checkout's
-  root (untracked): `SIMLOCK_E2E_AGENT_DEVICE=<path>` and any other
-  variable below. The script reads it; nobody passes them by hand.
+  root (untracked): the variables below. The script reads it; nobody
+  passes them by hand.
 
 The machine can run a line only if:
 
@@ -252,9 +254,9 @@ The machine can run a line only if:
 | Android    | `command -v emulator adb` finds both                       |
 | iOS window | the iOS check; `mdfind "kMDItemCFBundleIdentifier == 'com.apple.dt.Devices'"` prints a path; `stat -f %Su /dev/console` is not `root` (someone is logged in); `pgrep -x DeviceHub` finds nothing (the test starts DeviceHub itself with `-shutdownStartedDevicesOnQuit NO` and quits it at the end). Run `scripts/slow-e2e.sh e2e/slow-ios-window.test.ts` |
 | Physical iOS | `uname -s` is `Darwin`; `SIMLOCK_PHYSICAL_IOS` is the UDID of an iPhone on USB (trusted, Developer Mode on, unlocked, Auto-Lock Never); `SIMLOCK_PHYSICAL_IOS_APP` is a `.app` signed for it. `/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" /Library/Developer/PrivateFrameworks/CoreDevice.framework/Resources/Info.plist` prints a version whose major is 642 or later (streaming a phone needs the CoreDevice of Xcode 27 or later; the framework is machine-wide and does not follow `xcode-select`). DeviceHub and Xcode are not running during the lane. The stream cases need the iPhone on iOS 27 or later; an older iPhone runs the refusal case instead. Run `scripts/slow-e2e.sh --physical e2e/slow-ios-physical.test.ts` |
-| iOS foldable | the iOS check; `xcrun simctl list runtimes` lists iOS 27.1 or later and `xcrun simctl list devicetypes` lists `iPhone Duo`; `SIMLOCK_E2E_AGENT_DEVICE` names the agent-device the lane pins (agent-device through simlock row); `command -v ffmpeg` finds it. Run `scripts/slow-e2e.sh e2e/slow-ios-foldable.test.ts` |
-| iOS simulator input | the iOS check; `xcrun simctl list runtimes` lists an iOS 27 or later runtime; `uname -m` is `arm64`; `SIMLOCK_E2E_AGENT_DEVICE` names the agent-device the lane pins (agent-device through simlock row). Run `scripts/slow-e2e.sh e2e/slow-ios-input.test.ts` |
-| agent-device through simlock | `node -v` is 22.12.0 or later (agent-device's own minimum); the iOS check and `uname -m` is `arm64` (the fixture app is arm64 only), or the Android check; `SIMLOCK_E2E_AGENT_DEVICE` (in `.slow-lane.env`) is the absolute path of `bin/agent-device.mjs` in an install of the agent-device version `package.json` pins for `@agent-device/proxy` (`npm install -g agent-device@<version>`, or a checkout at tag `v<version>` built with `pnpm install && pnpm build && pnpm build:android`, the last building the Android snapshot helper); room for two devices: `node -p "os.totalmem() / 2**30"` prints at least 7 for iOS or 12 for Android (simlock's 4 GiB OS reserve plus two of its default 1.5 GiB iOS or 4 GiB Android per-device budgets). Run `scripts/slow-e2e.sh e2e/slow-agent-device.test.ts` or `scripts/slow-e2e.sh e2e/slow-agent-device-gateway.test.ts` |
+| iOS foldable | the iOS check; `xcrun simctl list runtimes` lists iOS 27.1 or later and `xcrun simctl list devicetypes` lists `iPhone Duo`; `scripts/slow-e2e.sh check --fix` passes; `command -v ffmpeg` finds it. Run `scripts/slow-e2e.sh e2e/slow-ios-foldable.test.ts` |
+| iOS simulator input | the iOS check; `xcrun simctl list runtimes` lists an iOS 27 or later runtime; `uname -m` is `arm64`; `scripts/slow-e2e.sh check --fix` passes. Run `scripts/slow-e2e.sh e2e/slow-ios-input.test.ts` |
+| agent-device through simlock | `node -v` is 22.12.0 or later (agent-device's own minimum); the iOS check and `uname -m` is `arm64` (the fixture app is arm64 only), or the Android check; `scripts/slow-e2e.sh check --fix` passes (it installs the agent-device version `package.json` pins for `@agent-device/proxy`); room for two devices: `node -p "os.totalmem() / 2**30"` prints at least 7 for iOS or 12 for Android (simlock's 4 GiB OS reserve plus two of its default 1.5 GiB iOS or 4 GiB Android per-device budgets). Run `scripts/slow-e2e.sh e2e/slow-agent-device.test.ts` or `scripts/slow-e2e.sh e2e/slow-agent-device-gateway.test.ts` |
 | Physical Android | `command -v adb` finds it; `adb devices -l` lists `$SIMLOCK_PHYSICAL_ANDROID` on a USB transport (a `usb:` field) in state `device`; `SIMLOCK_PHYSICAL_ANDROID_APK` names an APK; `SIMLOCK_PHYSICAL_ANDROID_NETWORK` beside it names an address `adb devices -l` lists in state `device` with no `usb:` field, for the network case. Run `scripts/slow-e2e.sh --physical e2e/slow-android-physical.test.ts` |
 | agent-device with a physical phone | the agent-device through simlock checks above (the Android or iOS one), and the Physical Android checks with `SIMLOCK_PHYSICAL_ANDROID`, or the Physical iOS checks with `SIMLOCK_PHYSICAL_IOS`; for iOS also `SIMLOCK_E2E_IOS_TEAM_ID` and `SIMLOCK_E2E_IOS_BUNDLE_ID` (in `.slow-lane.env`); set `SIMLOCK_E2E_IOS_PROVISIONING_PROFILE` and `SIMLOCK_E2E_IOS_SIGNING_IDENTITY` only for manual signing, which an Xcode-managed profile fails. Run `scripts/slow-e2e.sh --physical e2e/slow-agent-device-physical.test.ts` |
 | Physical Android, a person at the phone | the Physical Android checks above, and `SIMLOCK_PHYSICAL_PERSON` is `1`. Run `scripts/slow-e2e.sh --physical-manual e2e/slow-android-physical-manual.test.ts` |
@@ -278,7 +280,7 @@ the tool's docs alone.
 
 | Tool | Version | Read it |
 | ---- | ------- | ------- |
-| agent-device | the version `package.json` pins for `@agent-device/proxy` (tag `v<version>`) | `git -C <checkout> show v<version>:<path>` in a clone of `callstack/agent-device` (on a machine that runs the slow lane, the one `.slow-lane.env` names). No clone: `gh api 'repos/callstack/agent-device/contents/<path>?ref=v<version>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
+| agent-device | the version `package.json` pins for `@agent-device/proxy` (tag `v<version>`) | `git -C <checkout> show v<version>:<path>` in a clone of `callstack/agent-device`. No clone: `gh api 'repos/callstack/agent-device/contents/<path>?ref=v<version>' -H 'Accept: application/vnd.github.raw'`. The proxy as simlock bundles it: `node_modules/@agent-device/proxy/dist` |
 | Android SDK tools, Xcode tools | the installed ones | run them: `<tool> --help`, or the command itself |
 | simlock's own CLI | `main` | `pnpm build`, then `node dist/cli/main.js <command> --help` or the command itself |
 | systemd (Linux service units) | tag `v255` (Ubuntu 24.04 LTS); CI's fast lane runs on Linux (`ubuntu-24.04`), the slow lane does not | `gh api 'repos/systemd/systemd/contents/<path>?ref=v255' -H 'Accept: application/vnd.github.raw'` |
