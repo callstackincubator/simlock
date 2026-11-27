@@ -215,8 +215,8 @@ they name; never build again or restart review at round 1.
      Mechanical changes get a coordinator diff check.
    - Commits after reviews passed (a CI fix, a conflict resolution, a base
      merge): `node .agents/scripts/fix-kind.mjs <the last check's Commit>
-     <head> --base <base> --findings <file>`. Exit 0: no fix-check; the head
-     is a `--verified` of item 4. Any other exit: the targeted fix-check.
+     <head> --base <base> --findings <file>`. Exit 0, the PR's patch is the
+     same: no fix-check, the head is item 4's `--verified`. Else the fix-check.
    - Every body edit goes through `node .agents/scripts/issue-body.mjs
      <M> --pr set-section <heading> <file>` (`replace <old> <new>` for
      one line; `<N>` without `--pr` for an issue): the PR body's `##

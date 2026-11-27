@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,30 +16,13 @@ const SCRIPT = join(
 const SOURCE = "src/a.ts";
 const TEST = "src/a.test.ts";
 const IMAGE = "src/a.png";
-const lines = (...all: string[]) => `${all.join("\n")}\n`;
-const BASE_SOURCE = lines("one", "two", "three", "four", "five", "six", "seven");
-const PR_SOURCE = BASE_SOURCE.replace("two", "two by the PR");
-const WORKFLOW = ".github/workflows/ci.yml";
-const PR_WORKFLOW = lines("on:", "  push:", "    branches: [main]");
-const PR_TEST = lines(
-  "const LIMIT = 20;",
-  'const NAME = "case 1";',
-  "const WAIT = 5; // seconds: 5",
-  "it.each([",
-  '  ["adds", 1, 2],',
-  '])("%s", (_, a, sum) => {',
-  "  expect(add(a, a)).toBe(sum);",
-  "}, 30_000);",
-  "/*",
-  " waits 20 s",
-  "*/",
-  "const LABEL = `sum`;",
-  "const AFTER = 5;",
-);
-const NUMBERS = PR_TEST.replace("= 20;", "= 60;")
-  .replace("30_000", "60_000")
-  .replace("1, 2]", "1, 3]");
-const UNSURE = "more than a number outside strings and comments changed";
+const BASE_SOURCE = `${"header one two three four five six seven open read write close eight nine ten eleven tail"
+  .split(" ")
+  .join("();\n")}();\n`;
+const GUARD = "if (!ok) return;";
+const PR_SOURCE = BASE_SOURCE.replace("open();\n", `open();\n${GUARD}\n`);
+const PR_TEST = 'it("adds", () => {\n  expect(add(1, 1)).toBe(2);\n});\n';
+const CHANGED = "its part of the PR's patch changed";
 
 // why: a conflict makes git exit 1 with the merge left open, which each case then resolves and
 // commits; the identity is given here because CI's git has none, and a merge refuses without one.
@@ -57,7 +40,7 @@ interface Finding {
   readonly outcome: string;
 }
 
-// why: `main` holds the source file, `task` changes one line of it and adds a test; that
+// why: `main` holds the source file, `task` adds one line to it, a test and an image; that
 // commit is the reviewed one, and each case adds what came after the review.
 function repository() {
   const dir = mkdtempSync(join(tmpdir(), "fix-kind-"));
@@ -78,12 +61,7 @@ function repository() {
   git("init", "-q", "-b", "main");
   commit({ [SOURCE]: BASE_SOURCE });
   git("switch", "-qc", "task");
-  const previous = commit({
-    [SOURCE]: PR_SOURCE,
-    [TEST]: PR_TEST,
-    [IMAGE]: "\0one",
-    [WORKFLOW]: PR_WORKFLOW,
-  });
+  const previous = commit({ [SOURCE]: PR_SOURCE, [TEST]: PR_TEST, [IMAGE]: "\0one" });
   const onMain = (files: Readonly<Record<string, string>>) => {
     git("switch", "-q", "main");
     commit(files);
@@ -104,119 +82,81 @@ function repository() {
 
 // why: each case builds a repository with about fifteen git processes, which pass the 20 s default on a loaded Windows runner.
 describe("fix-kind.mjs", { timeout: 60_000 }, () => {
-  it.each([
-    ["merged cleanly two lines from the PR's own", "four", "four by main"],
-    ["conflicted on the next line and kept both sides", "three", "three by main"],
-  ])("passes a merge of a base that %s", (_, line, byMain) => {
+  it("passes a merge of a base that only moves the PR's hunks to other line numbers", () => {
     const { check, dir, git, onMain } = repository();
-    onMain({ [SOURCE]: BASE_SOURCE.replace(line, byMain) });
+    onMain({ [SOURCE]: `preface();\n${BASE_SOURCE}`, "src/b.ts": "by main\n" });
     mergeMain(dir);
-    writeFileSync(join(dir, SOURCE), PR_SOURCE.replace(line, byMain));
-    git("add", ".");
     git("commit", "-qm", "merge");
 
     const result = check();
 
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(
-      /^verified by: script \(fix-kind \w{9}\.\.\w{9}: the PR adds and removes the same lines\)\n$/,
+      /^verified by: script \(fix-kind \w{9}\.\.\w{9}: the PR's patch is the same\)\n$/,
     );
   });
 
-  it.each([
-    ["numbers outside every string and comment", NUMBERS],
-    ["a blank line above every template literal", `\n${PR_TEST}`],
-  ])("passes a fix that changes only %s in a test script", (_, text) => {
-    const { check, commit } = repository();
-    commit({ [TEST]: text });
+  it("sends a merge of a base that changed a line of context beside the PR's line to the fix-check", () => {
+    const { check, dir, git, onMain } = repository();
+    onMain({ [SOURCE]: BASE_SOURCE.replace("write();", "write(1);") });
+    mergeMain(dir);
+    git("commit", "-qm", "merge");
 
-    expect(check()).toEqual({
-      status: 0,
-      stdout: expect.stringContaining(`only numbers in test code changed: ${TEST})`),
-    });
-  });
-
-  it.each([
-    ["a source file", { [SOURCE]: PR_SOURCE.replace("six", "six again") }, `${SOURCE}: not a test`],
-    ["a doc", { "src/AGENTS.md": "- a rule\n" }, "src/AGENTS.md: not a test script"],
-    ["a binary file beside a test", { [IMAGE]: "\0two", [TEST]: NUMBERS }, `${IMAGE}: not a test`],
-    [
-      "a doc among the e2e tests",
-      { "e2e/README.md": "text\n" },
-      "e2e/README.md: not a test script",
-    ],
-    ["a fixture among the e2e tests", { "e2e/a.json": "{}\n" }, "e2e/a.json: not a test script"],
-    ["a test with JSX", { "src/b.dom.test.tsx": "x\n" }, "src/b.dom.test.tsx: not a test script"],
-    [
-      "only the indentation of a line the PR added",
-      { [WORKFLOW]: PR_WORKFLOW.replace("    branches", "  branches") },
-      `${WORKFLOW}: not a test script`,
-    ],
-    [
-      "a title in a one-line table row",
-      { [TEST]: PR_TEST.replace('"adds"', '"sums"') },
-      `${TEST}: ${UNSURE}: "["sums", 1, 2],"`,
-    ],
-    [
-      "a title given to it.each",
-      { [TEST]: PR_TEST.replace('"%s"', '"%s twice"') },
-      `${TEST}: ${UNSURE}: "])("%s twice", (_, a, sum) => {"`,
-    ],
-    [
-      "a number inside a string",
-      { [TEST]: PR_TEST.replace("case 1", "case 2") },
-      `${TEST}: ${UNSURE}: "const NAME = "case 2";"`,
-    ],
-    [
-      "a number in a trailing comment",
-      { [TEST]: PR_TEST.replace("seconds: 5", "seconds: 6") },
-      `${TEST}: ${UNSURE}: "const WAIT = 5; // seconds: 6"`,
-    ],
-    [
-      "a number inside a block comment",
-      { [TEST]: PR_TEST.replace("waits 20 s", "waits 30 s") },
-      `${TEST}: ${UNSURE}: "waits 20 s"`,
-    ],
-    [
-      "a number below a template literal",
-      { [TEST]: PR_TEST.replace("AFTER = 5", "AFTER = 6") },
-      `${TEST}: ${UNSURE}: "const AFTER = 5;"`,
-    ],
-    [
-      "a call in a test",
-      { [TEST]: PR_TEST.replace("toBe(sum)", "toEqual(sum)") },
-      `${TEST}: ${UNSURE}: "expect(add(a, a)).toEqual(sum);"`,
-    ],
-    [
-      "a comment in a test",
-      { [TEST]: `// why: the sum is exact\n${PR_TEST}` },
-      `${TEST}: ${UNSURE}: "// why: the sum is exact"`,
-    ],
-  ])("sends a fix that changes %s to the fix-check", (_, files, reason) => {
-    const { check, commit } = repository();
-    commit(files);
-
-    const result = check();
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(`fix-kind: ${reason}`);
+    expect(check()).toEqual({ status: 1, stdout: `fix-kind: ${SOURCE}: ${CHANGED}\n` });
   });
 
   it("sends a merge whose conflict resolution rewrote the PR's line to the fix-check", () => {
     const { check, dir, git, onMain } = repository();
-    onMain({ [SOURCE]: BASE_SOURCE.replace("two", "two by main") });
+    onMain({ [SOURCE]: BASE_SOURCE.replace("open();\n", "open();\nif (!ready) return;\n") });
     mergeMain(dir);
-    writeFileSync(join(dir, SOURCE), BASE_SOURCE.replace("two", "two by both"));
+    writeFileSync(join(dir, SOURCE), PR_SOURCE.replace(GUARD, "if (!ok || !ready) return;"));
     git("add", ".");
     git("commit", "-qm", "merge");
 
-    expect(check()).toEqual({ status: 1, stdout: `fix-kind: ${SOURCE}: not a test script\n` });
+    expect(check()).toEqual({ status: 1, stdout: `fix-kind: ${SOURCE}: ${CHANGED}\n` });
   });
 
-  it("sends any fix to the fix-check while a finding is open", () => {
+  it.each([
+    [
+      "moves a line the PR added past lines of the base",
+      { [SOURCE]: BASE_SOURCE.replace("write();\n", `write();\n${GUARD}\n`) },
+      SOURCE,
+    ],
+    [
+      "re-indents a line the PR added",
+      { [SOURCE]: PR_SOURCE.replace(GUARD, `  ${GUARD}`) },
+      SOURCE,
+    ],
+    ["changes a number in a test", { [TEST]: PR_TEST.replace("toBe(2)", "toBe(3)") }, TEST],
+    ["changes a binary file", { [IMAGE]: "\0two" }, IMAGE],
+    ["adds a file", { "src/AGENTS.md": "- a rule\n" }, "src/AGENTS.md"],
+  ])("sends a fix that %s to the fix-check", (_, files, path) => {
     const { check, commit } = repository();
-    commit({ [TEST]: NUMBERS });
+    commit(files);
 
+    expect(check()).toEqual({ status: 1, stdout: `fix-kind: ${path}: ${CHANGED}\n` });
+  });
+
+  it("sends a fix that makes a file executable, or renames one, to the fix-check", () => {
+    const mode = repository();
+    chmodSync(join(mode.dir, SOURCE), 0o755);
+    mode.git("update-index", "--chmod=+x", SOURCE);
+    mode.git("commit", "-qm", "mode");
+    const renamed = repository();
+    renamed.git("mv", TEST, "src/b.test.ts");
+    renamed.git("commit", "-qm", "rename");
+
+    expect(mode.check()).toEqual({ status: 1, stdout: `fix-kind: ${SOURCE}: ${CHANGED}\n` });
+    expect(renamed.check()).toEqual({
+      status: 1,
+      stdout: `fix-kind: ${TEST}: ${CHANGED}\nfix-kind: src/b.test.ts: ${CHANGED}\n`,
+    });
+  });
+
+  it("sends an unchanged patch to the fix-check while a finding is open", () => {
+    const { check } = repository();
+
+    expect(check([{ id: "R1", outcome: "fixed" }]).status).toBe(0);
     expect(
       check([
         { id: "R1", outcome: "fixed" },
@@ -233,12 +173,14 @@ describe("fix-kind.mjs", { timeout: 60_000 }, () => {
     onMain({ "src/b.ts": "by main\n" });
     git("switch", "-q", "main");
     git("switch", "-qc", "rebased");
-    commit({ [SOURCE]: PR_SOURCE, [TEST]: PR_TEST });
+    commit({ [SOURCE]: PR_SOURCE, [TEST]: PR_TEST, [IMAGE]: "\0one" });
 
-    const result = check([], previous);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("not an ancestor of the head; a rebase needs the check");
+    expect(check([], previous)).toEqual({
+      status: 1,
+      stdout: expect.stringMatching(
+        /^fix-kind: \w{9}: not an ancestor of the head; a rebase needs the check\n$/,
+      ),
+    });
   });
 
   it("exits 2 on a commit the clone lacks, and without its arguments", () => {

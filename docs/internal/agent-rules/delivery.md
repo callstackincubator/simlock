@@ -255,7 +255,7 @@ is open, done means closed as completed.
     section with its counts line, no "spec needs" line, the agent footer),
     green CI, and no conflict. Before calling it the agent also checks what
     the script cannot read: no blocking finding is open and assessment is complete. A conflict, or red
-    CI, gets one fix run, a fix check (rule 14) unless `.agents/scripts/fix-kind.mjs` passes the fix, and the gate again. Anything else short of that parks the issue with
+    CI, gets one fix run, a fix check (rule 14) unless `.agents/scripts/fix-kind.mjs` finds the PR's patch unchanged, and the gate again. Anything else short of that parks the issue with
     a handoff and leaves the PR for the maintainer.
 
 16. **The slow lane runs one at a time, through its script.** The slow
