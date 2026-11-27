@@ -217,7 +217,7 @@ describe("the console lane in CI (.github/workflows/ci.yml)", () => {
 const WINDOWS_SHARDS_AT_LEAST = 3;
 
 describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
-  it("runs `pnpm run test:unit` as `Unit tests (Windows, <shard>/<shards>)` over a matrix of at least three shards on windows-2025 under bash with a 30 minute limit, `quality` needs it, and text files check out with LF", () => {
+  it("runs `pnpm run test:unit` as `Unit tests (Windows) (<shard>/<shards>)` over a matrix of at least three shards on windows-2025 under bash with a 30 minute limit, `quality` needs it, and text files check out with LF", () => {
     const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
     const attributes = readFileSync(join(REPO_ROOT, ".gitattributes"), "utf8");
     const jobs = ciJobs(ci);
@@ -229,7 +229,7 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
       WINDOWS_SHARDS_AT_LEAST,
     );
     expect(windows).toContain(
-      `\n    name: Unit tests (Windows, \${{ matrix.shard }}/${shards.length})\n`,
+      `\n    name: Unit tests (Windows) (\${{ matrix.shard }}/${shards.length})\n`,
     );
     expect(windows).toContain("runs-on: windows-2025");
     expect(windows).toMatch(/\n {6}shell: bash\n|\n {4}defaults:\n {6}run:\n {8}shell: bash\n/);

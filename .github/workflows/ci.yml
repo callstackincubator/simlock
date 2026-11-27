@@ -73,7 +73,7 @@ jobs:
   # One runner spends 11 to 17 minutes in the tests, where every other job ends within 5, so
   # they run in three shards.
   windows-unit:
-    name: Unit tests (Windows, ${{ matrix.shard }}/3)
+    name: Unit tests (Windows) (${{ matrix.shard }}/3)
     needs: changes
     # Runs unless Changes said there is nothing to test, so a broken Changes job runs it.
     if: ${{ !cancelled() && needs.changes.outputs.windows != 'false' }}
