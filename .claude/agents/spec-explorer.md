@@ -5,6 +5,7 @@ model: haiku
 effort: medium
 autoCompactWindow: 100000
 tools: Read, Grep, Glob, Bash
+omitClaudeMd: true
 ---
 
 # Explore one area before a spec is written

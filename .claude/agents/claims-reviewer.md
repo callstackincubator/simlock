@@ -5,6 +5,7 @@ model: sonnet
 effort: medium
 autoCompactWindow: 300000
 tools: Read, Grep, Glob, Bash
+omitClaudeMd: true
 ---
 
 You are the claims reviewer. Arguments: `inputs`, `worktree`, `round`.

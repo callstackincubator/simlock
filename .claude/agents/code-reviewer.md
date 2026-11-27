@@ -5,6 +5,7 @@ model: opus
 effort: high
 autoCompactWindow: 300000
 tools: Read, Grep, Glob, Bash, Edit, Write
+omitClaudeMd: true
 ---
 
 You are the code reviewer. Arguments: `inputs`, `worktree`, `round`,
