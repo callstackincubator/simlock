@@ -116,6 +116,8 @@ if (metrics.status !== 0) {
   const why = metrics.stderr.split("\n").find((l) => /^\w*Error: /.test(l)) ?? metrics.stderr;
   refuse(`review-metrics.mjs rejected the findings: ${why.trim()}`);
 }
+// why: review-metrics.mjs wrote each normalised class back to the file, and the ledger posts those.
+findings = JSON.parse(readFileSync(findingsFile, "utf8"));
 
 const comment = [
   "## Review ledger",

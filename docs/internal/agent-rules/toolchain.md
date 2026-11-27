@@ -321,8 +321,10 @@ ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> ro
 <file>]` reads the runs so tagged from Claude Code's transcripts on this
 machine and prints their models, seconds, tokens and cost, and with
 `--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
-what goes in the findings file and where the result is posted. It reports,
-it checks nothing. Runs tagged `stage=replay` (a frozen snapshot reviewed
+what goes in the findings file and where the result is posted. With
+`--findings` it also checks the findings file and writes a class that
+starts with a rule and its number back as that rule plus `detail`; the
+script's header says what it refuses. Runs tagged `stage=replay` (a frozen snapshot reviewed
 again by `review-replay.sh`) are left out unless `--replay` is given.
 `node .agents/scripts/delivery-metrics.mjs [--end <iso>] [--days 14] [--prs <n,n>] [--json]`
 prints cost, time and autonomy per merged PR, the orchestrator included; its header lists every

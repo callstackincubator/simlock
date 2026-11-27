@@ -3,6 +3,7 @@
 // to `main` without the maintainer's `bug:ready`. Both read facts, never an agent's confidence.
 //
 //   node .agents/scripts/fast-track.mjs <n>            entry check, after the triage report
+//   node .agents/scripts/fast-track.mjs <n> --dry-run  the entry decision; changes nothing
 //   node .agents/scripts/fast-track.mjs <n> --pr <m>   exit check, before the merge
 //
 // Entry passes when issue <n> is open, carries `bug:new`, has no assignee, has a
@@ -12,7 +13,7 @@
 // from such an account. It then
 // adds `bug:ready` and `fast-track`, removes `bug:new`, prints `fast-track: #<n> is bug:ready`
 // and exits 0. Otherwise it changes nothing, prints `fast-track: #<n> held: <reasons>` and
-// exits 1.
+// exits 1. With `--dry-run` a pass prints `fast-track: #<n> would be bug:ready` instead.
 //
 // Exit has nothing to check, and exits 0, unless issue <n> carries `fast-track`. Then PR <m>
 // passes when it changes at most MAX_LINES lines in at most MAX_FILES files, touches no path in
@@ -40,8 +41,9 @@ const permissions = new Map();
 
 const [number] = process.argv.slice(2);
 const pr = option("--pr");
+const dryRun = process.argv.includes("--dry-run");
 if (!/^\d+$/.test(number ?? "") || (process.argv.includes("--pr") && !/^\d+$/.test(pr ?? ""))) {
-  console.error("usage: fast-track.mjs <n> [--pr <m>]");
+  console.error("usage: fast-track.mjs <n> [--dry-run | --pr <m>]");
   process.exit(64);
 }
 const nwo = repository();
@@ -74,6 +76,10 @@ function entryCheck() {
   }
   if (!exists(`branches/bug/${number}-repro`)) holds.push(`bug/${number}-repro does not exist`);
   if (holds.length > 0) held(holds);
+  if (dryRun) {
+    console.log(`fast-track: #${number} would be bug:ready`);
+    return;
+  }
   api("POST", `issues/${number}/labels`, "-f", "labels[]=bug:ready", "-f", "labels[]=fast-track");
   // why: the issue-state workflow removes the previous state label too; whoever is second
   // gets a 404, which is the state both want.
