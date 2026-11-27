@@ -298,6 +298,91 @@ describe("tool-guard.mjs", () => {
     expect(result.additionalContext).toContain("`pnpm typecheck` in place of");
   });
 
+  it.each([
+    "tsc --noEmit",
+    "node_modules/.bin/tsc --noEmit",
+    "./node_modules/.bin/tsc --noEmit",
+    `${slashed(ROOT)}/node_modules/.bin/tsc --noEmit`,
+    "pnpm tsc --noEmit",
+    "pnpm exec tsc --noEmit",
+    "npx tsc --noEmit",
+    "npx -y tsc --noEmit",
+    "npx --yes tsc --noEmit",
+    "npx --no-install tsc --noEmit",
+    "tsc -p . --noEmit",
+    "tsc --noEmit --project .",
+    "tsc --noEmit -p ./",
+    "tsc --noEmit -p tsconfig.json",
+    "tsc --noEmit -p ./tsconfig.json",
+    "tsc --noEmit -p ui",
+    "tsc -p ui/tsconfig.json --noEmit",
+    "tsc --noEmit -p packages/e2e",
+    "tsc --noEmit -p packages/e2e/tsconfig.json",
+  ])("takes %s for a type check pnpm typecheck replaces", (command) => {
+    const result = answered({
+      tool_name: "Bash",
+      tool_input: { command, timeout: 600000 },
+      agent_id: "a1",
+      cwd: slashed(ROOT),
+    });
+
+    expect(result.updatedInput).toEqual({ command: "pnpm typecheck", timeout: 600000 });
+  });
+
+  // why: each row is the nearest call to an accepted form that runs tsc somewhere else, with
+  // other files or another project; the last two hold a run the pattern finds but must not swap.
+  it.each([
+    "tsc -p .",
+    "tsc --noEmit --watch",
+    "tsc --noEmit src/a.ts",
+    "tsc --noEmit false",
+    "scripts/tsc --noEmit",
+    "pnpm exec node_modules/.bin/tsc --noEmit",
+    "pnpm run tsc --noEmit",
+    "pnpm dlx tsc --noEmit",
+    "pnpm -r tsc --noEmit",
+    "pnpm -r exec tsc --noEmit",
+    "pnpm --dir packages/e2e exec tsc --noEmit",
+    "pnpm --dir=packages/e2e exec tsc --noEmit -p .",
+    "pnpm -C=ui exec tsc --noEmit",
+    "pnpm --filter=simlock exec tsc --noEmit",
+    "npx --prefix=/tmp tsc --noEmit",
+    "npx --prefix /tmp tsc --noEmit",
+    "npx -p typescript tsc --noEmit",
+    "npx -y -p typescript tsc --noEmit",
+    "npx --no tsc --noEmit",
+    "bunx tsc --noEmit",
+    "tsc --noEmit -p e2e",
+    "tsc --noEmit -p e2e/tsconfig.typecheck.json",
+    "tsc --noEmit -p website",
+    "tsc --noEmit --project=.",
+    "tsc --noEmit -p . -p ui",
+    "tsc --noEmit -p",
+    'pnpm --dir=ui exec tsc --noEmit; tsc --noEmit -p "."',
+    "pnpm exec tsc --noEmit # was: npx tsc --noEmit",
+  ])("never rewrites %s", (command) => {
+    const result = answered({
+      tool_name: "Bash",
+      tool_input: { command, timeout: 600000 },
+      agent_id: "a1",
+      cwd: slashed(ROOT),
+    });
+
+    expect(result.updatedInput).toBeUndefined();
+  });
+
+  it.each([
+    "pnpm --dir=packages/e2e exec tsc --noEmit -p .",
+    "pnpm -C=ui exec tsc --noEmit",
+    "pnpm --filter=simlock exec tsc --noEmit",
+    "npx --prefix=/tmp tsc --noEmit",
+  ])("refuses %s, whose launcher flag names another place to run", (command) => {
+    const result = bash(command, "a1", "implementer", { cwd: slashed(ROOT) });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(`\`${command}\` is under "Checks agents never run"`);
+  });
+
   it("refuses a sub-agent's tsc where pnpm typecheck is not the same check", () => {
     const elsewhere = slashed(mkdtempSync(join(tmpdir(), "tool-guard-scratch-")));
     const reason = "for types that is `pnpm typecheck`";

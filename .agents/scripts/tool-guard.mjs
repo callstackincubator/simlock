@@ -118,10 +118,21 @@ const TYPECHECK_PROJECTS = new Set([
   "packages/e2e",
   "packages/e2e/tsconfig.json",
 ]);
-// why: a candidate `tsc` run in the blanked command: launcher, program, plain arguments, then
-// the command's end or a redirect.
+// why: every way a call may start `tsc` and still be rewritten; any other launcher or flag
+// (`--dir=<d>`, `-r`, `--prefix=<d>`) runs it somewhere `pnpm typecheck` does not.
+const TSC_LAUNCHERS = new Set([
+  "",
+  "pnpm",
+  "pnpm exec",
+  "npx",
+  "npx -y",
+  "npx --yes",
+  "npx --no-install",
+]);
+// why: only finds the text of a candidate run in the blanked command: a launcher from the list,
+// the program, plain arguments, then the command's end or a redirect. `isTypecheck` decides.
 const TSC_RUN =
-  /(?<![\w./-])(?:(?:pnpm|npx)(?:\s+(?:exec|-[\w-]+))*\s+)?[\w./-]*\btsc(?![\w./-])(?:[ \t]+[\w./=-]+(?![\w./=-]|[<>]))*(?=[ \t]*(?:$|[\n;&|)`]|\d*[<>]))/g;
+  /(?<![\w./-])(?:pnpm(?:[ \t]+exec)?[ \t]+|npx(?:[ \t]+(?:-y|--yes|--no-install))?[ \t]+)?[\w./-]*\btsc(?![\w./-])(?:[ \t]+[\w./=-]+(?![\w./=-]|[<>]))*(?=[ \t]*(?:$|[\n;&|)`]|\d*[<>]))/g;
 const TIMEOUT_NOTE =
   "The tool guard set `timeout: 600000` on this Bash call: a test run under the default 120 s " +
   "moves to the background.";
@@ -881,55 +892,63 @@ function waitingRules(raw, shell) {
 }
 
 // why: the parser says which commands are a `tsc --noEmit` that `pnpm typecheck` replaces, in a
-// directory that has the script; the pattern finds their text. The command is rewritten only
-// when both agree on the count, so text inside a string or after `echo` is never touched.
+// directory that has the script; the pattern finds their text. The rewrite stands only when the
+// rewritten call parses to the same commands with exactly those swapped, so a launcher the
+// pattern does not know, a string or a comment never yields a changed call.
 function asTypecheck(raw) {
-  const runs = typecheckRuns(raw);
+  const swaps = typecheckSwaps(parseShell(raw));
   const spans = [...blanked(raw).matchAll(TSC_RUN)].filter((m) => isTypecheck(m[0].split(/\s+/)));
-  if (runs === 0 || spans.length !== runs) return null;
+  if (swaps === null || swaps.count === 0 || spans.length !== swaps.count) return null;
   let out = raw;
   for (const m of spans.reverse())
     out = `${out.slice(0, m.index)}pnpm typecheck${out.slice(m.index + m[0].length)}`;
-  return out;
+  const seen = (commands) => JSON.stringify(commands.map((c) => [c.words, c.redirects, c.stdin]));
+  return seen(parseShell(out)) === seen(swaps.expected) ? out : null;
 }
 
-// why: none counts once one of them runs where no `typecheck` script is, or after a `cd` the
-// guard cannot follow.
-function typecheckRuns(raw) {
-  const state = { dir: cwd };
-  let followed = true;
-  let runs = 0;
-  for (const cmd of parseShell(raw)) {
+// why: null once a run to swap sits where no `typecheck` script is.
+function typecheckSwaps(commands) {
+  const state = { dir: cwd, followed: true };
+  const expected = [];
+  let count = 0;
+  for (const cmd of commands) {
     const { words, dynamic } = commandWords(cmd);
-    if (path.basename(words[0] ?? "") === "cd") {
-      followed = changesDirectory(state, words, dynamic) && followed;
-    } else if (followed && !dynamic.some(Boolean) && isTypecheck(words)) {
-      if (!hasTypecheck(state.dir)) return 0;
-      runs++;
-    }
+    const swap = swapsHere(state, words, dynamic);
+    if (swap && !hasTypecheck(state.dir)) return null;
+    count += swap ? 1 : 0;
+    const lead = cmd.words.slice(0, cmd.words.length - words.length);
+    expected.push({ ...cmd, words: swap ? [...lead, "pnpm", "typecheck"] : cmd.words });
   }
-  return runs;
+  return { count, expected };
+}
+
+// why: after a `cd` the guard cannot follow, the directory of every later run is unknown.
+function swapsHere(state, words, dynamic) {
+  if (path.basename(words[0] ?? "") === "cd") {
+    state.followed = changesDirectory(state, words, dynamic) && state.followed;
+    return false;
+  }
+  return state.followed && !dynamic.some(Boolean) && isTypecheck(words);
 }
 
 function isTypecheck(words) {
   const at = words.findIndex((w) => path.basename(w) === "tsc");
-  if (at === -1 || !launchesIt(words.slice(0, at))) return false;
-  const rest = words.slice(at + 1);
-  return rest.includes("--noEmit") && rest.every((w, i) => w === "--noEmit" || isProject(rest, i));
+  if (at === -1 || !TSC_LAUNCHERS.has(words.slice(0, at).join(" "))) return false;
+  // why: a launcher takes the bare name; alone, the program is on PATH or in node_modules.
+  const program = at === 0 ? /^(?:(?:.*\/)?node_modules\/\.bin\/)?tsc$/ : /^tsc$/;
+  return program.test(words[at]) && checksTypes(words.slice(at + 1));
 }
 
-// why: the program itself, or `pnpm tsc`, `pnpm exec tsc`, `npx -y tsc`.
-function launchesIt(before) {
-  if (before.length === 0) return true;
-  const launcher = before[0] === "pnpm" || before[0] === "npx";
-  return launcher && before.slice(1).every((w) => w === "exec" || w.startsWith("-"));
-}
-
-// why: `-p` or its value, for a project `pnpm typecheck` compiles.
-function isProject(rest, i) {
+// why: `--noEmit`, and at most one `-p` with a project `pnpm typecheck` compiles.
+function checksTypes(rest) {
   const flag = (w) => w === "-p" || w === "--project";
   const known = (w) => TYPECHECK_PROJECTS.has(path.posix.join(w ?? "-", "."));
-  return flag(rest[i]) ? known(rest[i + 1]) : i > 0 && flag(rest[i - 1]) && known(rest[i]);
+  const project = (w, i) => (flag(w) ? known(rest[i + 1]) : i > 0 && flag(rest[i - 1]) && known(w));
+  return (
+    rest.includes("--noEmit") &&
+    rest.filter(flag).length <= 1 &&
+    rest.every((w, i) => w === "--noEmit" || project(w, i))
+  );
 }
 
 function hasTypecheck(dir) {

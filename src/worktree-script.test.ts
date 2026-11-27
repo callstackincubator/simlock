@@ -72,22 +72,23 @@ function fakePnpm(root: string, main: string, record: string): NodeJS.ProcessEnv
 }
 
 describe("worktree.sh", () => {
-  it("cuts a new branch from its base without tracking it, and an existing one tracking its own", () => {
-    const { root, main, stage } = fixture();
+  it("cuts a new branch from its base without tracking it, and a branch origin has tracking its own", () => {
+    const { root, main } = fixture();
     const env = fakePnpm(root, main, join(root, "installs"));
+    git(main, "push", "-q", "origin", "origin/main:refs/heads/task/3");
+    const worktree = (branch: string) =>
+      execFileSync(...scriptCommand(SCRIPT, [branch]), { cwd: main, encoding: "utf8", env }).trim();
     const upstream = (dir: string, branch: string) =>
       git(dir, "for-each-ref", "--format=%(upstream:short)", `refs/heads/${branch}`);
 
-    const cut = execFileSync(...scriptCommand(SCRIPT, ["task/2"]), {
-      cwd: main,
-      encoding: "utf8",
-      env,
-    }).trim();
+    const cut = worktree("task/2");
+    const resumed = worktree("task/3");
 
     expect(git(cut, "branch", "--show-current")).toBe("task/2");
     expect(git(cut, "rev-parse", "HEAD")).toBe(git(main, "rev-parse", "origin/main"));
     expect(upstream(cut, "task/2")).toBe("");
-    expect(upstream(stage, "task/1")).toBe("origin/task/1");
+    expect(git(resumed, "branch", "--show-current")).toBe("task/3");
+    expect(upstream(resumed, "task/3")).toBe("origin/task/3");
   });
 
   it("hands every stage of a task the worktree that already holds its branch, fast-forwarded to origin", () => {
