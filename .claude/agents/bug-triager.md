@@ -5,6 +5,7 @@ model: opus
 effort: high
 autoCompactWindow: 300000
 background: true
+tools: Bash, Read, Edit, Write, Grep, Glob, WebFetch, WebSearch, TaskStop, mcp__t3-code__send_to_user
 ---
 
 # Triage a bug
