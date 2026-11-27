@@ -19,14 +19,56 @@ export function succeeds(file: string, args: readonly string[]): boolean {
   }
 }
 
-export function hasIosRuntime(): boolean {
-  if (process.platform !== "darwin" || process.arch !== "arm64") return false;
-  try {
-    return execFileSync("xcrun", ["simctl", "list", "runtimes"], { encoding: "utf8" }).includes(
-      "iOS",
-    );
-  } catch {
-    return false;
+interface RuntimeProbe {
+  readonly platform: string;
+  readonly arch: string;
+  /** why: the text of `xcrun simctl list runtimes`; it throws when the command fails. */
+  list(): string;
+  now(): number;
+  pause(ms: number): void;
+}
+
+const HOST: RuntimeProbe = {
+  arch: process.arch,
+  list: () =>
+    execFileSync("xcrun", ["simctl", "list", "runtimes"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  now: () => Date.now(),
+  // why: a file's platforms are decided while it is collected, so the wait cannot be a promise.
+  pause: (ms) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  },
+  platform: process.platform,
+};
+
+const RUNTIME_LIST_RETRY_MS = 5_000;
+
+/**
+ * why: a file skips its iOS cases on a host with no iOS: not an Apple-silicon Mac, a Mac with no
+ * simctl, or one whose simctl lists no iOS runtime. A simctl that is there and fails says nothing
+ * about the host, so it is asked again for a few seconds and then fails the file with its error:
+ * a skipped platform reads as a pass.
+ */
+export function hasIosRuntime(probe: RuntimeProbe = HOST): boolean {
+  if (probe.platform !== "darwin" || probe.arch !== "arm64") return false;
+  const deadline = probe.now() + RUNTIME_LIST_RETRY_MS;
+  for (;;) {
+    try {
+      return probe.list().includes("iOS");
+    } catch (error: unknown) {
+      const failed = error as { code?: string; stderr?: string; message: string };
+      const text = (failed.stderr ?? "").trim() || failed.message;
+      if (failed.code === "ENOENT" || /unable to find utility "simctl"/.test(text)) return false;
+      if (probe.now() >= deadline) {
+        throw new Error(
+          `xcrun simctl list runtimes kept failing for ${String(RUNTIME_LIST_RETRY_MS / 1000)} s on a Mac that has simctl, so its iOS cases cannot be skipped: ${text}`,
+          { cause: error },
+        );
+      }
+      probe.pause(500);
+    }
   }
 }
 

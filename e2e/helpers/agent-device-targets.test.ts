@@ -7,12 +7,79 @@ import {
   ANDROID,
   FIRST_SNAPSHOT,
   freeLoopbackPort,
+  hasIosRuntime,
   listLeases,
   makeAgent,
   warmUp,
   withSharedDaemon,
   type SharedTestEnv,
 } from "./index.js";
+
+// why: a host that answers `xcrun simctl list runtimes` with each of <answers> in turn (an Error is thrown), on a clock that only `pause` moves.
+function host(answers: readonly (string | Error)[], platform = "darwin", arch = "arm64") {
+  const state = { calls: 0, clock: 0 };
+  const probe = {
+    arch,
+    list: () => {
+      const answer = answers[Math.min(state.calls++, answers.length - 1)]!;
+      if (typeof answer === "string") return answer;
+      throw answer;
+    },
+    now: () => state.clock,
+    pause: (ms: number) => {
+      state.clock += ms;
+    },
+    platform,
+  };
+  return { probe, state };
+}
+
+const failure = (stderr: string, code?: string) =>
+  Object.assign(new Error("failed"), { code, stderr });
+const IOS_LISTED =
+  "== Runtimes ==\niOS 27.1 (27.1 - 24B80) - com.apple.CoreSimulator.SimRuntime.iOS-27-1\n";
+const SERVICE_DOWN = "Failed to locate a valid instance of CoreSimulatorService in the bootstrap.";
+
+describe("hasIosRuntime", () => {
+  it("is true where simctl lists an iOS runtime and false where it lists none, on an Apple-silicon Mac", () => {
+    expect(hasIosRuntime(host([IOS_LISTED]).probe)).toBe(true);
+    expect(hasIosRuntime(host(["== Runtimes ==\ntvOS 27.0 (27.0 - 24J5)\n"]).probe)).toBe(false);
+  });
+
+  it("is false without asking simctl on Linux and on an Intel Mac", () => {
+    const linux = host([IOS_LISTED], "linux", "arm64");
+    const intel = host([IOS_LISTED], "darwin", "x64");
+
+    expect([hasIosRuntime(linux.probe), hasIosRuntime(intel.probe)]).toEqual([false, false]);
+    expect([linux.state.calls, intel.state.calls]).toEqual([0, 0]);
+  });
+
+  it("is false at once on a Mac with no xcrun or no simctl", () => {
+    const noXcrun = host([failure("", "ENOENT")]);
+    const noSimctl = host([
+      failure('xcrun: error: unable to find utility "simctl", not a developer tool or in PATH'),
+    ]);
+
+    expect([hasIosRuntime(noXcrun.probe), hasIosRuntime(noSimctl.probe)]).toEqual([false, false]);
+    expect([noXcrun.state.calls, noSimctl.state.calls]).toEqual([1, 1]);
+  });
+
+  it("asks again when simctl fails, and is true once it lists an iOS runtime", () => {
+    const flaky = host([failure(SERVICE_DOWN), failure(SERVICE_DOWN), IOS_LISTED]);
+
+    expect(hasIosRuntime(flaky.probe)).toBe(true);
+    expect(flaky.state).toEqual({ calls: 3, clock: 1_000 });
+  });
+
+  it("throws simctl's own error, and does not return false, when simctl still fails after 5 s", () => {
+    const down = host([failure(SERVICE_DOWN)]);
+
+    expect(() => hasIosRuntime(down.probe)).toThrow(
+      `xcrun simctl list runtimes kept failing for 5 s on a Mac that has simctl, so its iOS cases cannot be skipped: ${SERVICE_DOWN}`,
+    );
+    expect(down.state.clock).toBe(5_000);
+  });
+});
 
 describe("warmUp", () => {
   it("when a later warm-up lease fails, rejects and leaves none of the warm-up leases it took held", async () => {
