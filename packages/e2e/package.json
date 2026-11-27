@@ -35,7 +35,7 @@
   },
   "devDependencies": {
     "@e2e-dev/mobile": "0.12.9",
-    "agent-device": "0.21.41",
+    "agent-device": "0.21.42",
     "e2e": "0.25.0"
   },
   "peerDependencies": {
