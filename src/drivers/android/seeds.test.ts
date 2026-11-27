@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 
 import { buildPart, libraryHarness, seedHarness } from "./test-seeds.js";
 import {
   ANDROID_SDK_ROOT as sdk,
+  avdDirectory,
+  binaries,
   createdFromPackage,
   customDeviceXml,
   customFitXml,
@@ -17,6 +20,48 @@ const taggedHarness = (
 // why: a part of a decomposed module (ADR 0063) is tested through its own surface: these build
 // `Seeds` directly over a memory filesystem and a scripted runner, with the real parts it takes.
 describe("Seeds", () => {
+  it("normalizes dotted API targets before seed boots and preserves them in device copies", async () => {
+    for (const [api, generatedTarget, expectedTarget] of [
+      ["35", "android-35", "android-35"],
+      ["37.0", "android-0", "android-37"],
+    ] as const) {
+      const { driver, filesystem, runner } = await taggedHarness([
+        [api, "google_apis", "arm64-v8a"],
+      ]);
+      const seedHome = join(avdDirectory, "sources", "seed_two");
+      const iniPath = join(seedHome, "simlock.ini");
+      const generated = `avd.ini.encoding=UTF-8\npath=${join(seedHome, "simlock.avd")}\ntarget=${generatedTarget}\n`;
+      await filesystem.writeFileAtomic(iniPath, generated);
+      const bootMetadata: Promise<string>[] = [];
+      const spawn = runner.spawn.bind(runner);
+      vi.spyOn(runner, "spawn").mockImplementation((command, args, options) => {
+        if (command === binaries.emulator && args.includes("-avd")) {
+          bootMetadata.push(filesystem.readFile(iniPath));
+        }
+        return spawn(command, args, options);
+      });
+      const spec = await driver.resolveSpec({
+        model: "Pixel 5",
+        osVersion: api,
+        platform: "android",
+      });
+
+      const device = await driver.provision(spec);
+
+      const expected = generated.replace(`target=${generatedTarget}`, `target=${expectedTarget}`);
+      expect(await Promise.all(bootMetadata), `seed boot targets for API ${api}`).toEqual([
+        expected,
+        expected,
+      ]);
+      const copyHome = join(avdDirectory, device.deviceId);
+      expect(await filesystem.readFile(join(copyHome, "simlock.ini"))).toBe(
+        expected.replace(/^path=.*$/m, `path=${join(copyHome, "simlock.avd")}`),
+      );
+      expect(spec.osVersion).toBe(api);
+      expect(createdFromPackage(runner)).toBe(`system-images;android-${api};google_apis;arm64-v8a`);
+    }
+  });
+
   describe("image tag", () => {
     it("creates a tagged device from the host ABI's image when the tag is installed for two ABIs", async () => {
       // why: On an x86_64 host the foreign arm64-v8a image is listed first, so taking the first image
