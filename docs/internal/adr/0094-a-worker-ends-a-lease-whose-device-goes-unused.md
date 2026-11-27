@@ -1,6 +1,6 @@
 # 0094. A worker ends a lease whose device goes unused
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-27
 - **Feature:** #1899 (request #1553). The key, its default and bounds,
   what counts as use, the end reason, the messages and the record fields
