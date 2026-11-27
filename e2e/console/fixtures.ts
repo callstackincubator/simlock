@@ -256,6 +256,8 @@ function daemonConfig(mode: "worker" | "gateway", port: number, options: StartOp
           },
           // why: the console specs wait for a refill right after a grant; the wait itself is proven at the WarmPool seam.
           warmPool: { refillDelayMs: 0, ...(extraConfig.warmPool as object | undefined) },
+          // why: with pressure on, the worker samples this host's real memory and at `warming-paused` the warm pool starts nothing (ADR 0068), so a refill a spec waits for never comes on a loaded host.
+          memoryPressure: { enabled: false, ...(extraConfig.memoryPressure as object | undefined) },
         }
       : {}),
   };
