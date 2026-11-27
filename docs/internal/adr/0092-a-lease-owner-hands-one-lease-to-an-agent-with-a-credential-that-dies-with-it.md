@@ -66,52 +66,64 @@ while the lease lives.
 
 ### 2. The credential acts as the lease's owner, on that one lease only
 
-A handover identity carries the owner's principal and the lease it is
-scoped to. Every ownership check keeps reading the principal, and one
-more check runs before them: a scoped identity may call only the
-operations the feature lists, and only on its own lease. Every other
-operation is `FORBIDDEN`, and so is any other lease id. The check runs
-in the dispatcher, where the role check and `authorize` already run, so
-the HTTP routes, the remote session (ADR 0081) and the module lease
-routes that resolve a lease through `lease.get` all get it from one place.
-A list is cut to the one lease.
+A handover identity carries the lease owner's principal (never an
+operator's who made it) and the lease it is scoped to. Every ownership
+check keeps reading the principal. Before them, two allowlists hold the
+scope, so a route or operation nobody added stays refused:
+
+- the dispatcher, on every transport (HTTP, the remote session of ADR
+  0081, a gateway's dispatcher): only the listed operations, and only on
+  the scoped lease; a list is cut to that lease;
+- the HTTP path gate: only the lease's own paths, the lease list, and the
+  identity, health, session and agent-device paths.
 
 What the scope allows: reading and following the lease, renewing it
-within `lease.maxTtlMs`, releasing it, its screen stream and input, its
-files, and the agent-device front. It refuses `device.exec`, new lease
-requests and every admin operation. Exec runs commands on the worker as
-the daemon's user, so a credential that allowed it would not keep an
-agent to one device.
+within `lease.maxTtlMs`, releasing it, rotating it, its screen stream and
+input, its tunnels, its files, and agent-device. A tunnel reaches only the
+lease's own device ports. It refuses `device.exec`, new lease requests,
+another handover and every admin operation. Exec runs commands on the
+worker as the daemon's user, so a credential that allowed it would not
+keep an agent to one device.
 
 Because the principal is the owner's, the agent and the coordinator share
 the lease's agent-device tenant (principal and lease id). The coordinator
-can watch what the agent does on its own lease, and nothing of the
+can see what the agent does on its own lease, and nothing of the
 coordinator's other leases reaches the agent.
 
-### 3. It dies with the lease
+### 3. It dies with the lease and with its owner's token
 
-A handover credential verifies only while its lease is live on the
-daemon that made it. A verify that finds the lease gone refuses it, so
-there is no window after a lease ends. Its stored row is deleted when the
-lease ends, and at daemon start for every lease that is no longer live.
-A remote session opened with it closes when the lease ends, as
-`token revoke` closes a token's. Streams, input sockets and agent-device
-calls on the lease already end with it.
+A handover credential binds to its lease's id and grant time, and
+verifies only while that lease is live on the daemon that made it, so
+there is no window after the lease ends, and a later lease under the same
+chosen id does not revive it. A remote session opened with it is refused
+at its next call after the lease ends, and closed. Streams, input and
+tunnel sockets and agent-device calls on the lease already end with it.
 
-### 4. agent-device attaches to the handed-over lease
+When the owner is a token, the credential also ends when that token is
+revoked or expires (ADR 0093), and carries the token's expiry.
 
-`agent-device open --lease-id <lease>` with a handover credential does
-not lease a new device. agent-device already lets the caller name its
-lease id, and the front already uses one id for the agent-device lease
-and the simlock lease. So the front reads the credential's lease instead
-of requesting one, and forwards the allocate on the device that lease
-holds, as it already does when it allocates again after agent-device
-forgot a lease. An open with any other lease id is refused, with a
-message that names the handed-over lease. A call that names another lease is refused, and
-a call that names none is held to the credential's lease. `close` ends
-the simlock lease too, as it does for a lease the front made: either
-side may end a handed-over lease, the owner with `lease release` and the
-agent with `close` or `lease release`.
+Its stored row is deleted only once the daemon knows the lease ended. A
+gateway's lease index is empty until its workers report, so a lease it
+cannot see yet leaves the credential refused but kept.
+
+### 4. agent-device opens on the handed-over lease, under two ids
+
+Today the agent-device front makes the simlock lease at `open`, with the
+lease id agent-device made up, so one id serves both. A handed-over lease
+exists before `open`, and agent-device through the proxy always makes up
+its own id (it ignores `--lease-id`), so the two ids differ. The front
+maps them: `open` with a handover credential leases nothing, and opens
+agent-device's lease on the handed-over lease's device. Toward agent-device
+the front uses agent-device's id; toward simlock, and in the worker's
+record of what to release when the lease ends, the handed-over lease's.
+The agent needs no lease id: the credential names the lease.
+
+One agent-device lease is open on a handed-over lease at a time. A call
+that names any other lease is refused, a call that names none is held to
+the handed-over lease, and nothing of the owner's is adopted under the
+credential after a restart. `close` ends the simlock lease too, as it does
+for a lease the front made: either side may end a handed-over lease, the
+owner with `lease release` and the agent with `close` or `lease release`.
 
 ### 5. A gateway makes and checks its own
 
@@ -123,10 +135,9 @@ relays the owner's. A worker never sees one.
 
 - A coordinator can give an untrusted agent one device without an
   operator, and without cleaning up after it.
-- Every place that reads only the principal (the `lease.list` filter, the
-  agent-device `devices` cut, the front's map) must also honour the scope.
-  The dispatcher check covers the operations; the agent-device front gets
-  its own, named in the feature.
+- Every place that reads only the principal must also honour the scope:
+  the two allowlists cover operations and routes, and the agent-device
+  front gets its own checks, named in the feature.
 - An agent with a handover credential cannot run `simctl` or `adb`
   against its device. It drives the device through agent-device, the
   stream and input, and files.
@@ -145,6 +156,9 @@ relays the owner's. A worker never sees one.
 - **A short-lived agent token per job.** It still reaches every lease made
   with it and exec, and needs an operator. ADR 0093 adds an expiry for
   the cases a lease cannot scope.
+- **agent-device sends the handed-over lease's id.** Rejected: it needs
+  an agent-device change, and the agent would have to pass an id the
+  credential already names.
 - **Exec allowed on request.** Rejected: one flag would turn the credential
   back into a worker shell, and the point of a handover is that it is not
   one.
