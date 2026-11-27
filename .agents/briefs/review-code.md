@@ -17,7 +17,7 @@ Unrelated pre-existing debt is separate. A specified behavior is not immune
 to binding rules: apply `review-protocol.md` precedence.
 
 Prove a claim with the affected test file only, using the one-file commands
-under "Tests agents run" in `rules/toolchain.md`. Run nothing listed there
+under "Tests agents run", which follows this brief in your prompt. Run nothing `rules/toolchain.md` lists
 under "Checks agents never run", and never the slow lane. You may break
 code to see what a test catches: one edit, one run of its test file, then
 `git checkout .`. You may also write one new test file in the worktree to

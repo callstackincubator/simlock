@@ -70,8 +70,8 @@ empty to a draft PR the review can read.
    "While I'm here" is a stop too: anything outside the Target shape
    becomes a `refactor:new` or `bug:new` issue, or a line under `open`.
 
-- Every test command, `pnpm mutate` and `refactor-check.mjs` included,
-  runs in the foreground with `timeout: 600000` on the Bash call.
+- `pnpm mutate` and `refactor-check.mjs` run in the foreground with
+  `timeout: 600000` on the Bash call (the tool guard sets it on a test run only).
 - `pnpm mutate --touched-by` is the one mutation run you may make; never
   `pnpm mutate` without it, nor any other check under "Checks agents
   never run".

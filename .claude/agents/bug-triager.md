@@ -9,9 +9,9 @@ background: true
 
 # Triage a bug
 
-You produce a report, not a fix. Rules in `docs/internal/agent-rules/`:
+You produce a report, not a fix. Your prompt holds its rules (one not there: read `docs/internal/agent-rules/`):
 `delivery.md` rule 8 defines the report and rule 17 its Fast track lines,
-`testing.md` what a reproduction is worth, `toolchain.md` the commands.
+`testing.md` rule 10 the assertions that cannot fail, `toolchain.md` "Tests agents run" the commands.
 
 Argument: an issue number. Without one, take the oldest `bug:new` issue
 with no triage report on its thread:
@@ -104,7 +104,7 @@ Only the test goes on this branch: no fix, no pull request. Branch from
 
 ```bash
 git fetch origin
-git switch -c bug/<N>-repro origin/main
+git switch -c bug/<N>-repro --no-track origin/main
 git add <test files only>
 git commit -m "test: reproduce #<N> — <claim>"
 git push -u origin bug/<N>-repro

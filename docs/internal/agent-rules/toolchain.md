@@ -22,8 +22,8 @@ copies "Tests agents run"; change both together (a repo test compares them).
 `src/contract/`, and only the spec files it changed or whose page it
 changes; CI runs the whole lane. A page's behaviour is a DOM test, which
 `pnpm test:changed` runs; this lane holds what needs a real daemon or
-browser engine. Always with a spec file, in the foreground, with
-`timeout: 600000` on the Bash call (the tool guard refuses otherwise).
+browser engine. Always with a spec file, in the foreground; the tool guard
+sets `timeout: 600000` on a sub-agent's test run.
 
 (2) Only when the diff touches `website/`, `src/http/`, `src/contract/`,
 `src/modules/` or a module's `definition.ts`.
@@ -73,8 +73,8 @@ refactor's `--touched-by` run, below), the whole
 e2e suite, the console lane in every browser (`pnpm test:console`), `tsc`,
 `oxlint`, `depcruise`, `oxfmt`, `fallow`, `stryker`, `.agents/scripts/comment-lint.mjs`
 (outside the `garden-comments` routine), `.agents/scripts/test-lint.mjs`. A PreToolUse hook
-(`.agents/scripts/tool-guard.mjs`) refuses them in every sub-agent; keep its
-list and this one the same.
+(`.agents/scripts/tool-guard.mjs`) refuses them in every sub-agent, but runs `tsc --noEmit`
+on a project `pnpm typecheck` compiles as `pnpm typecheck`; keep its list and this one the same.
 
 - **Commit hook:** formats the staged files and stages the result, then
   lint, the comment lint (architecture rule 17), the test lint (testing
