@@ -267,6 +267,14 @@ sudo rm /Library/LaunchDaemons/local.fseventsd-restart.plist
 
 **Fix.** Run `simlock doctor --purge-orphans`. Or delete the UDID in the line by hand. See [Orphaned devices](#orphaned-devices).
 
+## Clipboards cross between simulators
+
+**Symptom.** `simlock doctor` prints `Warning [ios] simulator-app-clipboard-sync`, or a copied value shows up in another lease's simulator.
+
+**Cause.** Under `drivers.ios.deviceSet: default`, Simulator.app was running. It syncs the Mac clipboard into every simulator it shows, and Simlock's DeviceHub setting does not stop that.
+
+**Fix.** Quit Simulator.app, or turn off Simulator > Edit > Automatically Sync Pasteboard. Doctor checks when it runs, so run it again after a Simulator.app opens later.
+
 ## The event history is not written
 
 **Symptom.** `simlock status` shows a `History:` line, such as `History: the event history is not being written; see daemon.log.`, or `simlock stats` fails with `HISTORY_UNAVAILABLE`.

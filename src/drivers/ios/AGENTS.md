@@ -25,6 +25,7 @@ Resolve and boot:
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step.
 - Volume (`ios.simulator.audio: false`): apps play at volume 0. A baseline source is not silenced.
 - Window (`ios.simulator.headless: false`): DeviceHub is opened in the background and leaves started devices running when it quits. Only a non-zero exit of that open means it is missing: Simulator.app is then opened, detached.
+- Simulator.app syncs the Mac clipboard on its own, past DeviceHub's setting: under `default`, `advisories()` warns `simulator-app-clipboard-sync` while `pgrep -x Simulator` finds it. The mode above, without DeviceHub, opens it itself.
 
 Seeds (ADR 0061):
 

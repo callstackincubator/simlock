@@ -6,6 +6,19 @@ const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 const DEVICEHUB_BUNDLE_ID = "com.apple.dt.Devices";
 const SIMULATOR_APP_BUNDLE_ID = "com.apple.iphonesimulator";
 
+/** why: Simulator.app syncs the Mac clipboard into every simulator it attaches to, whatever DeviceHub's setting says (#1580). */
+export async function simulatorAppRunning(commands: {
+  readonly pgrep: (args: readonly string[], timeoutMs: number) => Promise<ProcessOutcome>;
+}): Promise<boolean> {
+  try {
+    const outcome = await commands.pgrep(["-x", "Simulator"], COMMAND_TIMEOUT_MS);
+    return outcome.kind === "finished" && outcome.result.code === 0;
+  } catch {
+    // why: an advisory is a hint; a host without pgrep gets none.
+    return false;
+  }
+}
+
 export type ProcessOutcome =
   | { readonly kind: "finished"; readonly result: ProcessResult }
   | { readonly kind: "timed-out" };

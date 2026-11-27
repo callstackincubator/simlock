@@ -39,6 +39,8 @@ The cost is that every tool on the Mac sees every simulator:
 
 DeviceHub's Mac clipboard sync is off for every Simlock simulator in Xcode's set, so one agent's clipboard never reaches another's device. A lease is refused if Simlock cannot turn the sync off.
 
+Simulator.app has its own clipboard sync, which this setting does not reach. While Simulator.app is running, `simlock doctor` warns `simulator-app-clipboard-sync`, and clipboards may cross between simulators. Quit it, or turn off Simulator > Edit > Automatically Sync Pasteboard. With `ios.simulator.headless` set to `false` on a Mac without DeviceHub, Simlock opens Simulator.app itself, so that mode does not isolate clipboards.
+
 ## Simulator windows
 
 With `default` and `ios.simulator.headless` set to `false`, every simulator Simlock gets ready shows on the Mac: in DeviceHub when it is installed, otherwise in a Simulator.app window. The window opens in the background, so the app you are typing in keeps focus. If a window cannot open, the lease still works, and the daemon log says `Could not open a window for iOS simulator`.
