@@ -18,9 +18,11 @@ import {
 // why: a host that answers `xcrun simctl list runtimes` with each of <answers> in turn (an Error is thrown), on a clock that only `pause` moves.
 function host(answers: readonly (string | Error)[], platform = "darwin", arch = "arm64") {
   const state = { calls: 0, clock: 0 };
+  const timeouts: number[] = [];
   const probe = {
     arch,
-    list: () => {
+    list: (timeoutMs: number) => {
+      timeouts.push(timeoutMs);
       const answer = answers[Math.min(state.calls++, answers.length - 1)]!;
       if (typeof answer === "string") return answer;
       throw answer;
@@ -31,7 +33,7 @@ function host(answers: readonly (string | Error)[], platform = "darwin", arch = 
     },
     platform,
   };
-  return { probe, state };
+  return { probe, state, timeouts };
 }
 
 const failure = (stderr: string, code?: string) =>
@@ -78,6 +80,17 @@ describe("hasIosRuntime", () => {
       `xcrun simctl list runtimes kept failing for 5 s on a Mac that has simctl, so its iOS cases cannot be skipped: ${SERVICE_DOWN}`,
     );
     expect(down.state.clock).toBe(5_000);
+  });
+});
+
+describe("hasIosRuntime, a simctl that hangs", () => {
+  it("gives each simctl call 15 s, and throws saying it gave no answer when the calls keep timing out", () => {
+    const hung = host([failure("", "ETIMEDOUT")]);
+
+    expect(() => hasIosRuntime(hung.probe)).toThrow(
+      "xcrun simctl list runtimes kept failing for 5 s on a Mac that has simctl, so its iOS cases cannot be skipped: no answer in 15 s",
+    );
+    expect(new Set(hung.timeouts)).toEqual(new Set([15_000]));
   });
 });
 

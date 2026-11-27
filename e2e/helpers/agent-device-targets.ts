@@ -22,18 +22,19 @@ export function succeeds(file: string, args: readonly string[]): boolean {
 interface RuntimeProbe {
   readonly platform: string;
   readonly arch: string;
-  /** why: the text of `xcrun simctl list runtimes`; it throws when the command fails. */
-  list(): string;
+  /** why: the text of `xcrun simctl list runtimes`; it throws when the command fails or gives no answer in <timeoutMs>. */
+  list(timeoutMs: number): string;
   now(): number;
   pause(ms: number): void;
 }
 
 const HOST: RuntimeProbe = {
   arch: process.arch,
-  list: () =>
+  list: (timeoutMs) =>
     execFileSync("xcrun", ["simctl", "list", "runtimes"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeoutMs,
     }),
   now: () => Date.now(),
   // why: a file's platforms are decided while it is collected, so the wait cannot be a promise.
@@ -44,6 +45,8 @@ const HOST: RuntimeProbe = {
 };
 
 const RUNTIME_LIST_RETRY_MS = 5_000;
+// why: a simctl that hangs would hold the file's collection for ever; a list takes 0.2 s, and the first one after CoreSimulator starts a few seconds.
+const RUNTIME_LIST_TIMEOUT_MS = 15_000;
 
 /**
  * why: a file skips its iOS cases on a host with no iOS: not an Apple-silicon Mac, a Mac with no
@@ -56,20 +59,31 @@ export function hasIosRuntime(probe: RuntimeProbe = HOST): boolean {
   const deadline = probe.now() + RUNTIME_LIST_RETRY_MS;
   for (;;) {
     try {
-      return probe.list().includes("iOS");
+      return probe.list(RUNTIME_LIST_TIMEOUT_MS).includes("iOS");
     } catch (error: unknown) {
-      const failed = error as { code?: string; stderr?: string; message: string };
-      const text = (failed.stderr ?? "").trim() || failed.message;
-      if (failed.code === "ENOENT" || /unable to find utility "simctl"/.test(text)) return false;
+      const failure = listFailure(error);
+      if (failure.noSimctl) return false;
       if (probe.now() >= deadline) {
         throw new Error(
-          `xcrun simctl list runtimes kept failing for ${String(RUNTIME_LIST_RETRY_MS / 1000)} s on a Mac that has simctl, so its iOS cases cannot be skipped: ${text}`,
+          `xcrun simctl list runtimes kept failing for ${String(RUNTIME_LIST_RETRY_MS / 1000)} s on a Mac that has simctl, so its iOS cases cannot be skipped: ${failure.text}`,
           { cause: error },
         );
       }
       probe.pause(500);
     }
   }
+}
+
+function listFailure(error: unknown): { readonly text: string; readonly noSimctl: boolean } {
+  const failed = error as { code?: string; stderr?: string; message: string };
+  if (failed.code === "ETIMEDOUT") {
+    return { noSimctl: false, text: `no answer in ${String(RUNTIME_LIST_TIMEOUT_MS / 1000)} s` };
+  }
+  const text = (failed.stderr ?? "").trim() || failed.message;
+  return {
+    noSimctl: failed.code === "ENOENT" || /unable to find utility "simctl"/.test(text),
+    text,
+  };
 }
 
 export interface Target {
