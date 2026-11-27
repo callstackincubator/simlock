@@ -193,8 +193,9 @@ Two scheduled tasks in T3 Code use it, so you do not have to ask. **Inbox**
 runs it every hour in one thread, labels reports that arrived with no
 label `bug:new` or `request:new`, and posts only when the list changed;
 reply there with the numbers to start, and it opens one thread per item.
-**Bug sweep** runs `deliver` every hour on the oldest `bug:new` that has
-no triage report, one bug at a time.
+**Bug sweep** runs `deliver` every hour on the oldest unassigned
+`bug:ready` that carries `fast-track`, else on the oldest `bug:new` that
+has no triage report, one bug at a time.
 
 ## Watching the pipeline
 

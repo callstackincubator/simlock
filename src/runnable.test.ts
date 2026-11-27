@@ -189,7 +189,9 @@ describe("runnable.mjs --bug", () => {
       "held: #20 carries bug:blocked, not bug:new or bug:ready\n",
     ],
   ])("holds %s whatever else is open", (_, issue, out) => {
-    expect(bugCheck({ 20: issue })).toEqual({ status: 1, out });
+    const liveClaim = { 21: claimed, pulls: [{ number: 30, head: "bug/21", fork: false }] };
+
+    expect(bugCheck({ 20: issue, ...liveClaim })).toEqual({ status: 1, out });
   });
 
   it(
