@@ -253,7 +253,7 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
     expect(attributes.split("\n")).toContain("* text=auto eol=lf");
   });
 
-  it("runs on every push to main, and on a pull request unless it changes no source, test, script or root build file; a Changes job that failed runs it; skipped, it leaves `Quality` green, and failed or cancelled it fails `Quality`", () => {
+  it("runs on every push to main, and on a pull request that changes a source, test or script file, a workflow or tool config the unit tests run, or a root build file; one that changes only docs, website pages, agent config, e2e files, the Swift package or a workflow the tests only read skips it; a Changes job that failed runs it; skipped, it leaves `Quality` green, and failed or cancelled it fails `Quality`", () => {
     const ci = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
     const jobs = ciJobs(ci);
     const windows = jobs.get("windows-unit") ?? "";
@@ -291,7 +291,8 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
       ["website/src/content/docs/docs/reference/cli.mdx", "README.md"],
       ["e2e/console/leases.spec.ts", "e2e/helpers/setup.ts", "playwright.config.ts"],
       [".claude/agents/reviewer.md", ".agents/briefs/build.md", "AGENTS.md"],
-      ["vendor/screen-capture/Package.swift", ".github/workflows/release.yml"],
+      ["vendor/screen-capture/Package.swift", ".github/workflows/website.yml"],
+      [".github/labels.json", "CHANGELOG.md"],
     ]) {
       expect(answer("pull_request", skipped), skipped.join(" ")).toBe("false");
     }
@@ -310,7 +311,13 @@ describe("the Windows unit job in CI (.github/workflows/ci.yml)", () => {
       "vitest.config.ts",
       "lefthook.yml",
       ".gitattributes",
+      ".oxlintrc.json",
+      ".dependency-cruiser.mjs",
+      ".dependency-cruiser.cycles.mjs",
+      ".dependency-cruiser-known-violations.json",
+      ".dependency-cruiser-known-cycles.json",
       ".github/workflows/ci.yml",
+      ".github/workflows/release.yml",
     ]) {
       expect(answer("pull_request", ["docs/internal/DELIVERY.md", run]), run).toBe("true");
     }

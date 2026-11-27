@@ -100,8 +100,8 @@ list and this one the same.
   check` steps run as parallel jobs (static checks, unit tests, the unit
   tests on Windows in three shards, the timing tests, the e2e lane in three
   shards); the Quality check passes only when all of them do. The Windows
-  shards run on every push to `main`, and on a pull request when it changes
-  a source, test, script or root build file. A contributor on Windows
+  shards run on every push to `main`, and on a pull request whose change
+  can give another result on Windows (list in `ci.yml`). A contributor on Windows
   runs the tests from Git Bash with Python 3 and jq installed, never PowerShell. A
   failure only a `Unit tests (Windows) (n/3)` job shows is reproduced by
   rerunning that job on the base commit's CI run (`gh run rerun <run> --job
