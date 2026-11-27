@@ -213,10 +213,10 @@ they name; never build again or restart review at round 1.
      at the cap: park; but once per PR, when every open finding has a Fix
      line and `Spec needs` is none, first one more fix run and `fix-check`.
      Mechanical changes get a coordinator diff check.
-   - Commits after reviews passed (a CI fix, a conflict resolution, a base
-     merge): `node .agents/scripts/fix-kind.mjs <the last check's Commit>
-     <head> --base <base> --findings <file>`. Exit 0, the PR's patch is the
-     same: no fix-check, the head is item 4's `--verified`. Else the fix-check.
+   - Commits after reviews passed, including conflict resolutions and CI
+     test fixes, need the applicable targeted fix-check before the gate.
+     A clean base merge alone needs no repeat review; record its new head
+     and base and let CI check it. Never silently reset the round cap.
    - Every body edit goes through `node .agents/scripts/issue-body.mjs
      <M> --pr set-section <heading> <file>` (`replace <old> <new>` for
      one line; `<N>` without `--pr` for an issue): the PR body's `##
@@ -258,13 +258,12 @@ they name; never build again or restart review at round 1.
 
    ```bash
    node .agents/scripts/review-ledger.mjs <M> --issue <N> --findings <file> \
-     --round <r>:<Commit> ... [--verified <ci|merge>:<head> ...] \
-     [--skipped <roles>] [--notes <file>] [--rejected <file>] [--incomplete <why>]
+     --round <r>:<Commit> ... [--skipped <roles>] [--notes <file>] \
+     [--rejected <file>] [--incomplete <why>]
    ```
 
    - `--round`: one per check in order, the SHA its report's `Commit`, `<r>`
      `1`, `2` or `fix-check:<review|ci|merge|hardware>`: what its commits answered.
-   - `--verified`: one per head `fix-kind.mjs` passed, with what it followed.
    - `--skipped`: the reviews the diff's kind left out, such as `spec` for
      a refactor or `code,claims` for an ADR-only diff.
    - `--notes`: a file of every Notes line of the reports, each
@@ -307,7 +306,8 @@ they name; never build again or restart review at round 1.
 
    Its `pending` and `re-running` lines need no action. Exit 0: merged. A conflict: an `implementer` fix run that merges the
    base branch. Red CI: one `implementer` fix run with the failing test
-   titles and the run id. Either way, item 3's `fix-kind.mjs` and the check it asks for, then the gate again. Any other exit, or red CI a second time: park with the
+   titles and the run id. Either way, the `fix-check` review in item 3
+   (none for a fix to tests outside the PR's diff), then the gate again. Any other exit, or red CI a second time: park with the
    line it printed. `held by the fast track` (rule 17) parks like any
    refusal: Blocked on is the script's `held:` line and "the maintainer
    merges the PR, or removes `fast-track`"; the PR stays ready.

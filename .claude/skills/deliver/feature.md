@@ -32,7 +32,7 @@ and a `B` line (a missing number, a cycle) parks the feature.
   bottom to top, in temporary worktrees, and never rebases. It stops on
   the first conflict (`conflict <branch> <parent> <files>`): send that
   task's branch one `implementer` fix run with `fixes: stack: merge
-  origin/<parent>`, then step 2 item 3's `fix-kind.mjs`, then the script again.
+  origin/<parent>`, then a fix check on that PR, then the script again.
   PR body Status: `Gate: waiting for the stack`.
 - Deliver up to two runnable tasks at once, each in its own worktree. Start
   a stage for one as soon as the other's agent is running; never wait on one

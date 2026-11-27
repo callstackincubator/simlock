@@ -59,22 +59,15 @@ function clone() {
 
 // why: each case builds an origin and a clone with about fifteen git processes, slow on a Windows runner.
 describe("review-ledger.mjs", { timeout: 60_000 }, () => {
-  it("writes each fix-check with its trigger, and a script-verified head on its own line", () => {
+  it("writes each fix-check with its trigger after its commit", () => {
     const { first, ledger, second } = clone();
 
-    const result = ledger(
-      "--round",
-      `1:${first}`,
-      "--round",
-      `fix-check:ci:${second.slice(0, 9)}`,
-      "--verified",
-      `merge:${second}`,
-    );
+    const result = ledger("--round", `1:${first}`, "--round", `fix-check:ci:${second.slice(0, 9)}`);
 
     expect(result).toEqual({
       status: 0,
       stderr: "",
-      lines: `Round 1: ${first}\nRound fix-check: ${second} ci\nVerified by script: ${second} merge`,
+      lines: `Round 1: ${first}\nRound fix-check: ${second} ci`,
     });
   });
 
@@ -100,7 +93,6 @@ describe("review-ledger.mjs", { timeout: 60_000 }, () => {
       "want <1|2>:<sha> or fix-check:",
     ],
     ["a trigger on round 2", ["--round", "2:ci:abcdef1"], "want <1|2>:<sha> or fix-check:"],
-    ["a review fix verified by script", ["--verified", "review:abcdef1"], "want <ci|merge>:<sha>"],
     ["a commit the clone lacks", ["--round", `2:${"b".repeat(40)}`], "is no commit here"],
   ])("refuses %s", (_, args, reason) => {
     const { first, ledger } = clone();

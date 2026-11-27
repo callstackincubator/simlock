@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // `node .agents/scripts/review-ledger.mjs <pr> --issue <n> --findings <file.json> --round
-// <r>:<sha> [--round <r>:<sha> ...] [--verified <trigger>:<sha> ...] [--skipped <roles>]
-// [--notes <file>] [--rejected <file>] [--incomplete <why>] [--dry-run]`: posts a PR's
-// `## Review ledger` comment (docs/internal/REVIEW.md, "Measurement"), writes the PR body's
-// `## Review` section (review-section.mjs) and then checks the PR body, so none of them is
-// built or run by hand.
+// <r>:<sha> [--round <r>:<sha> ...] [--skipped <roles>] [--notes <file>] [--rejected <file>]
+// [--incomplete <why>] [--dry-run]`: posts a PR's `## Review ledger` comment
+// (docs/internal/REVIEW.md, "Measurement"), writes the PR body's `## Review` section
+// (review-section.mjs) and then checks the PR body, so none of them is built or run by hand.
 //
 // For the section: `--skipped spec,claims` names the reviews the diff's kind left out, `--notes`
 // a file of the reports' note lines (`- <role>: ...`), `--rejected` a file of the rejected lines
@@ -15,8 +14,7 @@
 // expanded). <r> is 1, 2 or `fix-check:<trigger>`, the trigger being what the checked commits
 // answered: `review` findings, red `ci`, a `merge` of the base or a `hardware` loop; its line is
 // `Round fix-check: <full sha> <trigger>`. Each review fix-check after the first is one past
-// the cap (REVIEW.md), counted on a line `extension: <n>`. One `Verified by script: <full sha>
-// <ci|merge>` line per --verified, for a fix fix-kind.mjs passed without a check. Then what
+// the cap (REVIEW.md), counted on a line `extension: <n>`. Then what
 // `review-metrics.mjs --pr <pr> --issue <n> --findings <file>` prints, in a code block, then
 // the findings file in a `json` code block, then `*Written by an agent.*`. It refuses (exit 2,
 // nothing posted) a sha that is no commit after fetching the PR's head, a fix-check with no
@@ -36,14 +34,13 @@ import { option } from "./cli-args.mjs";
 import { reviewSection } from "./review-section.mjs";
 
 const USAGE =
-  "usage: review-ledger.mjs <pr> --issue <n> --findings <file.json> --round <1|2|fix-check:<ci|merge|review|hardware>>:<sha> [--round ...] [--verified <ci|merge>:<sha> ...] [--skipped <roles>] [--notes <file>] [--rejected <file>] [--incomplete <why>] [--dry-run]";
+  "usage: review-ledger.mjs <pr> --issue <n> --findings <file.json> --round <1|2|fix-check:<ci|merge|review|hardware>>:<sha> [--round ...] [--skipped <roles>] [--notes <file>] [--rejected <file>] [--incomplete <why>] [--dry-run]";
 const argv = process.argv.slice(2);
 const pr = argv[0];
 const issue = option("--issue");
 const findingsFile = option("--findings");
 const dryRun = argv.includes("--dry-run");
-const every = (name) => argv.flatMap((a, i) => (a === name ? [argv[i + 1] ?? ""] : []));
-const rounds = every("--round");
+const rounds = argv.flatMap((a, i) => (a === "--round" ? [argv[i + 1] ?? ""] : []));
 if (
   !/^\d+$/.test(pr ?? "") ||
   !/^\d+$/.test(issue ?? "") ||
@@ -87,16 +84,6 @@ for (const round of rounds) {
   lines.push(m[2] === undefined ? `Round ${m[1]}: ${sha}` : `Round fix-check: ${sha} ${m[2]}`);
 }
 if (reviewChecks > 1) lines.push(`extension: ${reviewChecks - 1}`);
-for (const verified of wrong === null ? every("--verified") : []) {
-  const m = /^(ci|merge):([0-9a-f]{7,40})$/.exec(verified);
-  if (m === null) {
-    wrong = `--verified ${verified}: want <ci|merge>:<sha>, the head fix-kind.mjs passed`;
-    break;
-  }
-  const sha = commitOf("--verified", verified, m[2], "the script-verified");
-  if (sha === null) break;
-  lines.push(`Verified by script: ${sha} ${m[1]}`);
-}
 spawnSync("git", ["update-ref", "-d", `refs/review-ledger/${pr}`]);
 if (wrong !== null) refuse(wrong);
 
