@@ -321,6 +321,7 @@ ledger: pr=<M> issue=<N> stage=<build|audit|fix|hardware-fix|review|hardware> ro
 <file>]` reads the runs so tagged from Claude Code's transcripts on this
 machine and prints their models, seconds, tokens and cost, and with
 `--findings` the outcome and class counts; [REVIEW.md](../REVIEW.md) says
-what goes in the findings file and where the result is posted. It reports,
-it checks nothing. Runs tagged `stage=replay` (a frozen snapshot reviewed
+what goes in the findings file and where the result is posted. With
+`--findings` it writes each class back as rule plus `detail` and refuses a
+class that names no rule number; it checks nothing else. Runs tagged `stage=replay` (a frozen snapshot reviewed
 again by `review-replay.sh`) are left out unless `--replay` is given.
