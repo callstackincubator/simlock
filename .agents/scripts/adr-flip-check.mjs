@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// `node .agents/scripts/adr-flip-check.mjs <commit>`: the coordinator's mechanical fix-check of
-// an `adr: <nnnn> to Accepted` fix (the deliver skill, "Merging the stack"; delivery rule 10).
+// `node .agents/scripts/adr-flip-check.mjs <commit>`: the mechanical check of a commit that
+// flips an ADR to Accepted (the deliver skill, "Merging the stack"; delivery rule 10).
+// adr-flip.mjs runs it on its own commit before it pushes, and the orchestrator runs it on the
+// commit of an `adr: <nnnn> to Accepted` fix run.
 // It passes (exit 0, `adr-flip: ok <nnnn> ...`) when <commit> changes only ADR files and, in
 // each, only the `- **Status:**` item (its line and the indented lines that continue it), now
 // reading `Accepted` and not "not yet implemented"; and in `docs/internal/adr/README.md` only
 // index rows, at most one per ADR the commit flips, each the row of one of them. Anything else
-// exits 1 with one `adr-flip: <path>: <what>` line per defect, and the coordinator sends the
-// fix back instead of recording `verified by: coordinator`.
+// exits 1 with one `adr-flip: <path>: <what>` line per defect: adr-flip.mjs pushes nothing, and
+// a fix run's commit goes back to a fix run.
 import { execFileSync } from "node:child_process";
 
 const commit = process.argv[2];

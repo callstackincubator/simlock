@@ -157,13 +157,13 @@ it ready and runs `deliver` on it, whose gate ends it instead. Every other routi
 only what it changes:
 
 1. `reviewer` with the PR number, round 1, started as the `review` skill
-   starts it. Fix each Fix line yourself,
-   within the routine's kind of edit, then the check its `Rerun` names:
-   `reviewer` with that round, `previous <Commit>` and the complete
-   resolution ledger. `Rerun: none` with findings open: leave the PR in
-   draft and report them.
+   starts it. Fix each Fix line yourself, within the routine's kind of
+   edit, then the check its `Rerun` names: `reviewer` with that round,
+   `previous <Commit>` and the complete resolution ledger. `Rerun: none`
+   with findings open: leave the PR in draft and report them.
 2. Add the `## Review` section as the `deliver` skill's step 4 shapes it,
-   `skipped` for each review the diff's kind left out.
+   `skipped` for each review the diff's kind left out, a fix-check passed
+   to `review-ledger.mjs` as `--round fix-check:review:<Commit>`.
 3. `gh pr ready <M>`, then `.agents/scripts/merge-pr.sh <M>`. Anything but
    a merge: leave the PR open and report.
 
