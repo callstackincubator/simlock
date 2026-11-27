@@ -227,8 +227,9 @@ Tests that start real simulators or emulators. Run them only through
   is deleted (`SIMLOCK_E2E_LOG_DIR`); a flow in the lane's reused home
   (`keepSeeds`, see `e2e/README.md`) gets `simlock-lane-home-<6 hex digits>/`.
 - Exit 75: another run holds the lock; the script prints the holder.
-- Exit 69: the machine is unfit (low disk, another tool at the
-  wrong version or not built); the script prints why.
+- Exit 69: the machine is unfit (low disk, a Simlock worker outside the
+  lane holding the machine, or the pinned agent-device not installed);
+  the script prints why.
 - Vitest arguments pass through: `-t "<title>"` runs one test, `--bail=1`
   ends the run at the first failure.
 - It first stops what earlier runs left behind. By hand: `scripts/slow-e2e.sh

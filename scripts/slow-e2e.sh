@@ -24,7 +24,8 @@
 # like bugs. Exits 69 without starting when the machine is not fit to run it: too little free
 # disk, a Simlock worker outside the lane holding the machine's worker lock, or no install of
 # the agent-device version package.json pins for @agent-device/proxy. The lock is a directory
-# holding the runner's pid; a lock whose pid is gone is stale and is taken over.
+# holding the pid of the run's shell while it checks and installs, then the runner's; a lock
+# whose pid is gone is stale and is taken over.
 #
 # The lane keeps its own agent-device, one npm install per pinned version, under
 # ~/.cache/simlock-slow-lane, and a run gets its path as SIMLOCK_E2E_AGENT_DEVICE, whatever the
@@ -58,10 +59,10 @@ py=python3
 case $(python3 --version 2>&1) in "Python 3"*) ;; *) py=python ;; esac
 
 helper() {
-  $py - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$tools" "$@" <<'EOF'
+  $py - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$tools" "${starter:-}" "$@" <<'EOF'
 import json, os, re, shutil, signal, subprocess, sys, tempfile, time
-lock, lane_tmp, root, min_free, worker_lock, tools, command = sys.argv[1:8]
-flags = sys.argv[8:]
+lock, lane_tmp, root, min_free, worker_lock, tools, starter, command = sys.argv[1:9]
+flags = sys.argv[9:]
 
 def read(path, default=""):
     try:
@@ -78,8 +79,9 @@ def alive(pid):
         return False
 
 def holder():
+    # why: a run holds the lock under its own shell's pid while it starts; to the check that run makes, that is no other lane.
     pid = read(os.path.join(lock, "pid"))
-    return pid if pid and alive(pid) else None
+    return pid if pid and pid != starter and alive(pid) else None
 
 def leftovers():
     # why: a run's processes name its homes in their command line (simulators) or environment
@@ -193,9 +195,9 @@ def agent_device_entry(version):
 def install_agent_device(version):
     npm = shutil.which("npm")
     if npm is None:
-        return "npm is not on PATH"
+        return "npm is not on PATH; install it"
     folder = agent_device_folder(version)
-    # why: npm writes into a folder of this call's own, renamed when whole, so a killed install never passes for one and two calls at once do not share files.
+    # why: npm writes into a folder of this call's own, renamed in when whole, so a killed install never passes for one. Nothing under the final name is ever removed: a run may be using it, and a call that finishes second keeps the first one's install.
     staging = f"{folder}.installing-{os.getpid()}"
     try:
         os.makedirs(staging)
@@ -204,12 +206,14 @@ def install_agent_device(version):
             cwd=staging, capture_output=True, text=True, timeout=600,
         )
         if done.returncode != 0:
-            return "; ".join([l.strip() for l in done.stderr.splitlines() if l.strip()][:2]) or f"npm install exited {done.returncode}"
-        shutil.rmtree(folder, ignore_errors=True)
-        os.rename(staging, folder)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        # why: another call may have put the same version in place first.
-        return None if agent_device_entry(version) else str(error)
+            return ("; ".join([l.strip() for l in done.stderr.splitlines() if l.strip()][:2]) or f"npm install exited {done.returncode}") + "; fix npm or the network"
+        if not agent_device_entry(version):
+            os.rename(staging, folder)
+    except subprocess.TimeoutExpired:
+        return "npm install ran over 600 s; fix npm or the network"
+    except OSError as error:
+        if not agent_device_entry(version):
+            return f"{folder} holds something else; remove it" if os.path.exists(folder) else f"{error}; fix it"
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return None
@@ -242,7 +246,7 @@ elif command == "check":
         else:
             failed = install_agent_device(version)
             if failed:
-                problems.append(f"agent-device {version} did not install into {folder}: {failed}; fix npm or the network, then run scripts/slow-e2e.sh check --fix")
+                problems.append(f"agent-device {version} did not install into {folder}: {failed}, then run scripts/slow-e2e.sh check --fix")
             else:
                 print(f"installed agent-device {version} into {folder}")
     # why: with no lane running, a lane worker an aborted run left is already killed by clean(), so a live holder is a worker outside the lane (ADR 0059 §4).
@@ -336,18 +340,26 @@ if ! mkdir "$lock" 2>/dev/null; then
   rm -rf "$lock"
   mkdir "$lock"
 fi
+# why: the check below may install for minutes; this shell's pid makes the lock a held one for all of it, until the runner's pid replaces it.
+starter=$$
+echo "$starter" > "$lock/pid"
+echo "$root" > "$lock/root"
+echo "$log" > "$lock/log"
 # why: a caller reads this script's output as the log path, so what the check stops and installs goes to stderr.
 if ! helper check --fix >&2; then
   rm -rf "$lock"
   exit 69
+fi
+# why: `stop` during the check removes the lock; a run it stopped must not start.
+if [ "$(cat "$lock/pid" 2>/dev/null)" != "$starter" ]; then
+  echo "stopped: the lane lock was removed while this run was starting" >&2
+  exit 75
 fi
 # why: the lane's own install, not a path set by hand, so the version is always the one this checkout pins.
 agent_device=$(helper agent-device)
 if [ -n "$agent_device" ]; then
   export SIMLOCK_E2E_AGENT_DEVICE="$agent_device"
 fi
-echo "$root" > "$lock/root"
-echo "$log" > "$lock/log"
 echo "$log" > "$lock.last"
 mkdir -p "$lane_tmp"
 

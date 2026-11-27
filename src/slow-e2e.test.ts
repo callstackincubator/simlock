@@ -1,10 +1,11 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,16 +53,28 @@ function agentDeviceInstall(tools: string, version: string, folder = version): s
 }
 
 // why: a stand-in for npm that records its arguments and, like the real one run in the staging
-// folder, leaves the package under node_modules there.
-function fakeNpm(bin: string, calls: string): void {
+// folder, leaves the package under node_modules there. With a gate, its nth call writes
+// `<gate>.started-<n>` and goes on once `<gate>.open-<n>` exists (or after 10 s), so a test holds
+// an install open and chooses which of two ends first.
+function fakeNpm(bin: string, calls: string, gate?: string): void {
   mkdirSync(bin, { recursive: true });
   writeFileSync(calls, "");
+  const wait =
+    gate === undefined
+      ? []
+      : [
+          `n=$(wc -l < "${calls}" | tr -d ' ')`,
+          `: > "${gate}.started-$n"`,
+          "i=0",
+          `while [ ! -e "${gate}.open-$n" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done`,
+        ];
   writeFakeCommand(
     bin,
     "npm",
     [
       "#!/bin/sh",
       `echo "$@" >> "${calls}"`,
+      ...wait,
       'for spec in "$@"; do :; done',
       "mkdir -p node_modules/agent-device/bin",
       `printf '{"name":"agent-device","version":"%s"}' "\${spec#agent-device@}" > node_modules/agent-device/package.json`,
@@ -69,6 +82,10 @@ function fakeNpm(bin: string, calls: string): void {
       "",
     ].join("\n"),
   );
+}
+
+async function until(seen: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !seen(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
 function machine({ installed = true }: { installed?: boolean } = {}) {
@@ -107,12 +124,26 @@ function machine({ installed = true }: { installed?: boolean } = {}) {
         timeout: 60_000,
       }),
     );
+  // why: a call the test does not wait for, so it can act while the script is still at work.
+  const start = (extra: NodeJS.ProcessEnv, ...args: string[]) => {
+    const child = spawn(...scriptCommand(SCRIPT, args), { cwd: repo, env: { ...env, ...extra } });
+    const out = { stdout: "", stderr: "" };
+    child.stdout.on("data", (chunk: Buffer) => (out.stdout += chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => (out.stderr += chunk.toString("utf8")));
+    const done = new Promise<{ status: number | null; stdout: string; stderr: string }>(
+      (resolve) => {
+        child.once("close", (status) => resolve(lf({ status, ...out })));
+      },
+    );
+    return { pid: child.pid, done };
+  };
   return {
     dir,
     repo,
     env,
     run,
     runWith,
+    start,
     lock: env.SIMLOCK_SLOW_LOCK,
     lane: env.SIMLOCK_SLOW_TMP,
     tools: env.SIMLOCK_SLOW_TOOLS,
@@ -449,9 +480,7 @@ describe("scripts/slow-e2e.sh", () => {
         TMPDIR: join(dir, "tmp"),
       });
       const log = started.stdout.trim();
-      for (let i = 0; i < 100 && !existsSync(`${log}.exit`); i++) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
+      await until(() => existsSync(`${log}.exit`));
 
       expect([started.status, log.startsWith(join(dir, "tmp"))]).toEqual([0, true]);
       expect(readFileSync(seen, "utf8")).toBe(
@@ -464,6 +493,100 @@ describe("scripts/slow-e2e.sh", () => {
           "agent-device.mjs",
         ),
       );
+    },
+  );
+
+  it("of two check --fix calls installing at once, the one that ends second leaves the install the first put in place untouched, and both pass", async () => {
+    const { dir, start, tools } = machine({ installed: false });
+    const gate = join(dir, "gate");
+    fakeNpm(join(dir, "bin"), join(dir, "npm-calls.txt"), gate);
+    const env = fakeCommandEnv(join(dir, "bin"));
+    const inUse = join(tools, `agent-device-${PINNED}`, "in-use");
+
+    const second = start(env, "check", "--fix");
+    await until(() => existsSync(`${gate}.started-1`));
+    const first = start(env, "check", "--fix");
+    await until(() => existsSync(`${gate}.started-2`));
+    writeFileSync(`${gate}.open-2`, "");
+    const firstEnded = await first.done;
+    writeFileSync(inUse, "");
+    writeFileSync(`${gate}.open-1`, "");
+    const secondEnded = await second.done;
+
+    expect([firstEnded.status, secondEnded.status, secondEnded.stderr]).toEqual([0, 0, ""]);
+    expect(existsSync(inUse)).toBe(true);
+    expect(readdirSync(tools)).toEqual([`agent-device-${PINNED}`]);
+  });
+
+  it("check --fix exits 69 saying to remove the folder when the lane's tools hold something else under the pinned version's name, and removes nothing", () => {
+    const { dir, runWith, tools } = machine({ installed: false });
+    fakeNpm(join(dir, "bin"), join(dir, "npm-calls.txt"));
+    const folder = join(tools, `agent-device-${PINNED}`);
+    agentDeviceInstall(tools, "0.21.27", PINNED);
+
+    const result = runWith(fakeCommandEnv(join(dir, "bin")), "check", "--fix");
+
+    expect([result.status, result.stderr]).toEqual([
+      69,
+      `unfit: agent-device ${PINNED} did not install into ${folder}: ${folder} holds something else; remove it, then run scripts/slow-e2e.sh check --fix\n`,
+    ]);
+    expect(
+      JSON.parse(
+        readFileSync(join(folder, "node_modules", "agent-device", "package.json"), "utf8"),
+      ),
+    ).toEqual({ name: "agent-device", version: "0.21.27" });
+  });
+
+  forks(
+    "a second run, started while the first has held the lock for two minutes installing agent-device, exits 75 naming the first as the holder, and the first then starts its lane",
+    async () => {
+      const { dir, lock, runWith, start } = machine({ installed: false });
+      const bin = join(dir, "bin");
+      const gate = join(dir, "gate");
+      fakeNpm(bin, join(dir, "npm-calls.txt"), gate);
+      writeFakeCommand(bin, "pnpm", "#!/bin/sh\n");
+      mkdirSync(join(dir, "tmp"));
+      const env = { ...fakeCommandEnv(bin), TMPDIR: join(dir, "tmp") };
+
+      const first = start(env);
+      await until(() => existsSync(`${gate}.started-1`));
+      const longAgo = new Date(Date.now() - 120_000);
+      utimesSync(lock, longAgo, longAgo);
+      const second = runWith(env);
+      writeFileSync(`${gate}.open-1`, "");
+      const firstEnded = await first.done;
+      await until(() => existsSync(`${firstEnded.stdout.trim()}.exit`));
+
+      expect(second.status).toBe(75);
+      expect(second.stderr).toContain(`busy: slow lane running as pid ${String(first.pid)} from `);
+      expect(firstEnded.status).toBe(0);
+      expect(readFileSync(`${firstEnded.stdout.trim()}.exit`, "utf8")).toBe("0\n");
+    },
+  );
+
+  forks(
+    "a run whose lock stop removes while it installs agent-device exits 75 saying so and starts no lane",
+    async () => {
+      const { dir, run, start } = machine({ installed: false });
+      const bin = join(dir, "bin");
+      const gate = join(dir, "gate");
+      const ran = join(dir, "pnpm-ran.txt");
+      fakeNpm(bin, join(dir, "npm-calls.txt"), gate);
+      writeFakeCommand(bin, "pnpm", `#!/bin/sh\n: > "${ran}"\n`);
+      mkdirSync(join(dir, "tmp"));
+
+      const starting = start({ ...fakeCommandEnv(bin), TMPDIR: join(dir, "tmp") });
+      await until(() => existsSync(`${gate}.started-1`));
+      const stopped = run("stop");
+      writeFileSync(`${gate}.open-1`, "");
+      const ended = await starting.done;
+
+      expect(stopped.stdout).toContain(`stopped run ${String(starting.pid)}, log `);
+      expect(ended.status).toBe(75);
+      expect(ended.stderr).toContain(
+        "stopped: the lane lock was removed while this run was starting\n",
+      );
+      expect(existsSync(ran)).toBe(false);
     },
   );
 

@@ -6,7 +6,8 @@
 //
 //   testing 5   bounds real time: `expect(...).toBeLessThan/GreaterThan` on `Date.now()`,
 //               `performance.now()` or `process.hrtime`, or on an x assigned from one of them in
-//               the same test; `*.timing.test.ts` files are exempt
+//               the same test; `*.timing.test.ts` files are exempt, and `e2e/slow-*` files
+//               are judged by the next rule instead
 //   testing 5   in an `e2e/slow-*` file, bounds real time from above outside the helper:
 //               `expect(...).toBeLessThan/toBeLessThanOrEqual` on a clock as above (the `expect`
 //               may start on an earlier line), or against a bound read as milliseconds (a number
