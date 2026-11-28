@@ -202,6 +202,10 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const { port: picked, started: daemon } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: {
           http: { enabled: true, host: "127.0.0.1", port },
         },
@@ -270,6 +274,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     options.onDriver?.(driver);
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         gateway: {
           url: options.gatewayUrl ?? gatewayUrl(),
@@ -632,6 +637,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     daemons.splice(daemons.indexOf(firstGateway), 1);
     const restartedGateway = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
       },

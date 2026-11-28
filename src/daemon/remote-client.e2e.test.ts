@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { connectSimlock } from "../client/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
-import { NodeFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  NodeFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -35,6 +40,10 @@ describe("the typed client over a worker's session path", () => {
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,

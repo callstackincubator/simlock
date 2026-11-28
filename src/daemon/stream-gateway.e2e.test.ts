@@ -8,7 +8,12 @@ import { startOnFreePort } from "../test-support/loopback-port.js";
 import { encodeScreenFrame, encodeScreenMeta, SCREEN_FRAME_TAG } from "../core/index.js";
 import type { ScreenCapture } from "../core/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
-import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  MemoryFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -79,6 +84,10 @@ describe("a screen stream through a gateway", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: {
           http: { enabled: true, host: "127.0.0.1", port },
           capabilities: { stream: { enabled: true } },
@@ -101,6 +110,7 @@ describe("a screen stream through a gateway", () => {
     const screen = paintingScreen();
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
         capabilities: { stream: { enabled: workerStreams } },
@@ -276,6 +286,10 @@ describe("a lease stream on a standalone worker", () => {
     const { port, started: worker } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: {
           capabilities: { stream: { enabled: streamEnabled } },
           http: { enabled: true, host: "127.0.0.1", port },

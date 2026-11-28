@@ -9,7 +9,13 @@ import { agentDeviceModuleWith } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayModule, OptionalModuleDefinition } from "../modules/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 
@@ -62,6 +68,7 @@ function gatewayOptions(
     dataDirectory: directory,
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
+    directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: modules,
     version: "1.2.3",
@@ -134,6 +141,7 @@ async function joinWorker(
     ],
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
+    directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
     optionalModules: modules,
     deviceDataTables: fakeDeviceDataTables,
     version: "1.2.3",

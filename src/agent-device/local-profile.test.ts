@@ -12,7 +12,13 @@ import {
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import { seedTokensDatabase } from "../auth/testing.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
@@ -99,6 +105,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
     const logs = new MemoryLogSink();
     const starting = startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       clock,
       configOverrides:
         options.defaults === undefined

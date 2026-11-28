@@ -13,7 +13,13 @@ import {
   FakeInputFactory,
   fakeDeviceDataTables,
 } from "../core/testing.js";
-import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  FakeClock,
+  MemoryFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -126,6 +132,10 @@ describe("a lease's tunnel socket", () => {
     const { port, started: daemon } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: {
           capabilities: { tunnel: { enabled } },
           http: { enabled: true, host: "127.0.0.1", port },
@@ -180,6 +190,10 @@ describe("a lease's tunnel socket", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         ...clock,
         configOverrides: {
           capabilities: { input, tunnel: { enabled: options.gatewayTunnel } },
@@ -198,6 +212,7 @@ describe("a lease's tunnel socket", () => {
     const deviceTcp = new FakeDeviceTcp();
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       ...clock,
       configOverrides: {
         capabilities: { input, tunnel: { enabled: options.workerTunnel } },
@@ -553,6 +568,10 @@ describe("a lease's tunnel socket", () => {
       const start = async (deviceTcp: FakeDeviceTcp): Promise<DaemonServer> =>
         await startDaemon({
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           configOverrides: { http: { enabled: false } },
           dataDirectory: path,
           deviceDataTables: fakeDeviceDataTables,

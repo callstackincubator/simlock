@@ -8,6 +8,7 @@ import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   FakeClock,
+  FakeDirectoryAccessReader,
   FakeHostInfo,
   FakeHostLoadProbe,
   type HostLoadCounters,
@@ -52,6 +53,7 @@ async function startOnClock(overrides: Partial<StartDaemonOptions> = {}) {
     clock,
     dataDirectory: directory,
     drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+    directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
     filesystem: new MemoryFilesystem(),
     hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
     logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
@@ -106,6 +108,7 @@ describe("startDaemon host load", () => {
         }),
       ],
       deviceDataTables: fakeDeviceDataTables,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: new FakeHostLoadProbe(COUNTERS),
       socketPath,
@@ -249,6 +252,10 @@ describe("startDaemon host load", () => {
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
           deviceDataTables: fakeDeviceDataTables,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           filesystem: new SecretRefusingFilesystem(),
           hostLoadProbe,
           socketPath: resolveDaemonSocketPath(directory),
@@ -303,6 +310,10 @@ describe("startDaemon in gateway mode host load", () => {
         role: "gateway",
         dataDirectory: directory,
         drivers: [],
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         filesystem: new MemoryFilesystem(),
         logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
         version: "1.2.3",
@@ -336,6 +347,10 @@ describe("startDaemon in gateway mode host load", () => {
             dataDirectory: first.directory,
             drivers: [],
             deviceDataTables: fakeDeviceDataTables,
+            directoryAccess: new FakeDirectoryAccessReader({
+              entries: [],
+              user: "S-1-5-21-1-2-3-1001",
+            }),
             filesystem: new MemoryFilesystem(),
             hostLoadProbe,
             version: "1.2.3",

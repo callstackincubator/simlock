@@ -14,6 +14,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
   resolveDaemonSocketPath,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -241,6 +242,10 @@ describe("optional modules: afterSocketClaimed", () => {
       ) =>
         ({
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           clock: new FakeClock(1_000),
           configOverrides: { capabilities: { alpha: { enabled: true } }, http: { enabled: false } },
           dataDirectory: directory,

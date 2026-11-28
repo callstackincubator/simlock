@@ -10,7 +10,13 @@ import { WebSocket } from "ws";
 import { createTestKey, keySetBody, type TestKey } from "../auth/testing.js";
 import { EXEC_STDIN_MAX_LENGTH, PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
-import { FakeClock, NodeFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  FakeClock,
+  NodeFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -184,6 +190,10 @@ describe("the session path", () => {
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         ...(clock === undefined ? {} : { clock }),
         configOverrides: {
           // why: the default capacity derives from the host's CPUs, and a 4-CPU runner allows one Android device while this file holds two leases at once.

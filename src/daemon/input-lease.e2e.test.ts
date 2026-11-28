@@ -10,7 +10,13 @@ import { WebSocket } from "ws";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import { createTestKey, keySetBody, type TestKey } from "../auth/testing.js";
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
-import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  FakeClock,
+  MemoryFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -176,6 +182,10 @@ describe("a lease's input socket", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: {
           capabilities: { input: { enabled: options.gatewayInput } },
           http: { enabled: true, host: "127.0.0.1", port },
@@ -192,6 +202,7 @@ describe("a lease's input socket", () => {
       .secret;
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         capabilities: { input: { enabled: options.workerInput } },
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
@@ -246,6 +257,10 @@ describe("a lease's input socket", () => {
     const { port, started: worker } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         ...(clock === undefined ? {} : { clock }),
         configOverrides: {
           capabilities: { input: { enabled: true }, stream: { enabled: true } },

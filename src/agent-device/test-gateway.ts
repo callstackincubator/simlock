@@ -16,6 +16,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
   type Filesystem,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import { seedTokensDatabase } from "../auth/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
@@ -201,6 +202,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const started = await startDaemon({
       clock,
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         ...(options.agentDevice === "unset"
           ? {}
@@ -256,6 +258,10 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       startDaemon({
         clock: workerClock,
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: {
           capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
           capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },

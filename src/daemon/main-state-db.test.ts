@@ -22,6 +22,7 @@ import {
   MemoryIpcTransport,
   NodeSqliteOpener,
   NoopLogger,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { productionDeviceDataTables, resolveDeviceDataTables } from "./driver-discovery.js";
@@ -106,6 +107,10 @@ describe("startDaemon state.db", () => {
           deviceDataTables: fakeDeviceDataTables,
           drivers: [],
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           version: "1.2.3",
         } as StartDaemonOptions),
       );
