@@ -8,7 +8,13 @@ import { WebSocket } from "ws";
 
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
-import { FakeSystemStats, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  FakeSystemStats,
+  MemoryFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -69,6 +75,7 @@ describe("device.rotate", () => {
     ];
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         capabilities: { input: { enabled: options.inputModule } },
         ...(options.gateway === undefined ? {} : { gateway: options.gateway }),
@@ -603,6 +610,10 @@ describe("device.rotate", () => {
       const { port: gatewayPort, started: gateway } = await startOnFreePort(async (gatewayPort) =>
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port: gatewayPort } },
           dataDirectory: gatewayDirectory,
           filesystem: new MemoryFilesystem(),

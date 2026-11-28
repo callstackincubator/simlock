@@ -16,6 +16,7 @@ import {
   MemoryIpcTransport,
   NoopLogger,
   SystemClock,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -81,6 +82,10 @@ describe("simlock tunnel against a lone worker", () => {
     const { port, started: daemon } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: {
           capabilities: { tunnel: { enabled: true } },
           http: { enabled: true, host: "127.0.0.1", port },

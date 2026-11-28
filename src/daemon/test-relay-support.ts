@@ -14,6 +14,7 @@ import {
   NoopLogger,
   SystemClock,
   type Logger,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { linkPair, TappedTransport, type LinkPair } from "../link/testing.js";
@@ -167,6 +168,7 @@ export async function startWorker(
   const logger = new RecordingLogger();
   const options: StartDaemonOptions = {
     hostLoadProbe: null,
+    directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
     // why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a relay test asks for neither.
     configOverrides: {
       capabilities: { "agent-device": { enabled: false } },
@@ -343,6 +345,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const { port, started: gateway } = await startOnFreePort((candidate) =>
     startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         http: {
           enabled: true,

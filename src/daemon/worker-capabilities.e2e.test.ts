@@ -7,7 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
-import { FakeHostInfo, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  FakeHostInfo,
+  MemoryFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -39,6 +45,10 @@ describe("a worker's capabilities through a gateway", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         role: "gateway",
         dataDirectory: gatewayDirectory,
@@ -59,6 +69,7 @@ describe("a worker's capabilities through a gateway", () => {
     directories.push(workerDirectory);
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         capabilities: { "agent-device": { enabled: options.enabled ?? true } },
         gateway: { label: "worker-a", token: secret, url: `ws://127.0.0.1:${String(port)}` },

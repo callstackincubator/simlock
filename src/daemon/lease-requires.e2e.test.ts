@@ -8,7 +8,12 @@ import { startOnFreePort } from "../test-support/loopback-port.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
-import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import {
+  MemoryFilesystem,
+  NoopLogger,
+  SystemClock,
+  FakeDirectoryAccessReader,
+} from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -57,6 +62,10 @@ describe("lease.request requires, through a gateway", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         role: "gateway",
         dataDirectory: directory,
@@ -88,6 +97,7 @@ describe("lease.request requires, through a gateway", () => {
     if (options.capability === "unavailable") fake.setUnavailable("down");
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       configOverrides: {
         capabilities: { "agent-device": { enabled: options.capability !== "off" } },
         capacity: { config: { maxRunning: options.maxRunning ?? 2 }, strategy: "fixed" },

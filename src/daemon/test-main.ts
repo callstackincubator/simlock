@@ -198,6 +198,7 @@ export async function startGateway(
   const { started: daemon } = await startOnFreePort((port) =>
     startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       clock,
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       role: "gateway",

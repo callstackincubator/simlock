@@ -16,6 +16,7 @@ import {
   MemoryLogSink,
   NodeFilesystem,
   resolveDaemonSocketPath,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import { parseDaemonArgv } from "./entry-support.js";
@@ -278,6 +279,7 @@ describe("the version a daemon reports", () => {
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
       socketPath,
     });
@@ -307,6 +309,7 @@ describe("startDaemon startup readiness", () => {
     const socketPath = resolveDaemonSocketPath(directory);
     const startPromise = startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -402,6 +405,10 @@ describe("startDaemon HTTP status for a quarantined device", () => {
         drivers: [driver],
         filesystem,
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         version: "1.2.3",
       } as StartDaemonOptions),
     );
@@ -492,6 +499,10 @@ describe("daemon role (ADR 0034)", () => {
       const { started: daemon } = await startOnFreePort((port) =>
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           drivers: [],
           deviceDataTables: fakeDeviceDataTables,

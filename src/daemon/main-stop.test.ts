@@ -23,6 +23,7 @@ import {
   NodeSqliteOpener,
   NoopLogger,
   resolveDaemonSocketPath,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import {
@@ -65,6 +66,7 @@ describe("startDaemon stopped while starting", () => {
       deviceDataTables: fakeDeviceDataTables,
       filesystem,
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       socketPath,
       version: "1.2.3",
     });
@@ -103,6 +105,10 @@ describe("startDaemon HTTP gateway startup readiness", () => {
       const sink = new MemoryLogSink();
       const startPromise = startDaemon({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         clock,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
@@ -500,6 +506,10 @@ describe("startDaemon stop with a warm target", () => {
         sink,
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           deviceDataTables: fakeDeviceDataTables,
           clock,
           configOverrides: {
@@ -551,6 +561,10 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
       try {
         const startPromise = startDaemon({
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           clock,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
@@ -618,6 +632,10 @@ describe("startDaemon socket race with HTTP enabled", () => {
     const options = (port: number): StartDaemonOptions =>
       ({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         clock: new FakeClock(1_000),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
@@ -673,6 +691,10 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
     const options = (gatewayUrl?: string): StartDaemonOptions =>
       ({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         clock: new FakeClock(1_000),
         configOverrides:
           gatewayUrl === undefined
@@ -736,6 +758,10 @@ describe("startDaemon HTTP gateway bind failure", () => {
       await expect(
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           clock,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
@@ -776,6 +802,10 @@ describe("startDaemon HTTP gateway bind failure", () => {
           deviceDataTables: fakeDeviceDataTables,
           filesystem: new MemoryFilesystem(),
           hostLoadProbe: null,
+          directoryAccess: new FakeDirectoryAccessReader({
+            entries: [],
+            user: "S-1-5-21-1-2-3-1001",
+          }),
           logger,
           role,
           version: "1.2.3",

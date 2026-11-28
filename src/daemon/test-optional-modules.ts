@@ -12,6 +12,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
   resolveDaemonSocketPath,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -124,6 +125,7 @@ export async function prepare(options: RigOptions, port?: number) {
     drivers: [driver],
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
+    directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: options.modules,
     socketPath: resolveDaemonSocketPath(directory),

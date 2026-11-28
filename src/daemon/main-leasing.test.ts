@@ -24,6 +24,7 @@ import {
   NodeSqliteOpener,
   NoopLogger,
   ScriptedProcessRunner,
+  FakeDirectoryAccessReader,
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import {
@@ -256,6 +257,7 @@ describe("startDaemon wires core and leasing together", () => {
 
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -301,6 +303,7 @@ describe("startDaemon wires core and leasing together", () => {
 
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: new FakeDirectoryAccessReader({ entries: [], user: "S-1-5-21-1-2-3-1001" }),
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -326,6 +329,10 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         clock,
         configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
@@ -382,6 +389,10 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         hostLoadProbe: null,
+        directoryAccess: new FakeDirectoryAccessReader({
+          entries: [],
+          user: "S-1-5-21-1-2-3-1001",
+        }),
         clock,
         configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
