@@ -55,30 +55,35 @@ function load(path: string): Source {
   };
 }
 
-// why: a start whose options are built elsewhere (`startDaemon(options())`, `startDaemon(prepared.startOptions)`) names the probe where that name is declared: the nearest declaration before the call in its file, else one in a file it imports.
-function declarationNamesProbe(code: string, name: string, before: number): boolean | undefined {
+// why: a start whose options are built elsewhere (`startDaemon(options())`, `startDaemon(prepared.startOptions)`) names the option where that name is declared: the nearest declaration before the call in its file, else one in a file it imports.
+function declarationNames(
+  option: RegExp,
+  code: string,
+  name: string,
+  before: number,
+): boolean | undefined {
   const declarations = [
     ...code.matchAll(new RegExp(`\\b(?:const|let|function)\\s+${name}\\b`, "g")),
   ];
   const declared = declarations.filter((match) => match.index < before).at(-1) ?? declarations[0];
   if (declared === undefined) return undefined;
   const body = code.indexOf("{", declared.index);
-  return /\bhostLoadProbe\b/.test(code.slice(body, closing(code, body)));
+  return option.test(code.slice(body, closing(code, body)));
 }
 
-function namesProbe(source: Source, argument: string, at: number): boolean {
-  if (/\bhostLoadProbe\b/.test(argument)) return true;
+function names(option: RegExp, source: Source, argument: string, at: number): boolean {
+  if (option.test(argument)) return true;
   const name = /^\s*([\w$.]+)/.exec(argument)?.[1]?.split(".").at(-1);
   if (name === undefined) return false;
   return (
-    declarationNamesProbe(source.code, name, at) ??
+    declarationNames(option, source.code, name, at) ??
     source.imported.some(
-      (imported) => declarationNamesProbe(imported.code, name, Infinity) === true,
+      (imported) => declarationNames(option, imported.code, name, Infinity) === true,
     )
   );
 }
 
-function startsWithoutProbe(path: string): string[] {
+function startsWithout(option: RegExp, path: string): string[] {
   const text = readFileSync(path, "utf8");
   if (
     !/import\s*\{[^}]*\bstartDaemon\b[^}]*\}\s*from\s*["'][./]*(?:daemon\/)?main\.js["']/.test(
@@ -91,17 +96,26 @@ function startsWithoutProbe(path: string): string[] {
   return [...source.code.matchAll(/\bstartDaemon\s*\(/g)].flatMap((call) => {
     const open = call.index + call[0].length - 1;
     const argument = source.code.slice(open + 1, closing(source.code, open));
-    if (namesProbe(source, argument, call.index)) return [];
+    if (names(option, source, argument, call.index)) return [];
     return [`${repoPath(path)}:${String(source.code.slice(0, call.index).split("\n").length)}`];
   });
 }
 
 describe("daemons started by tests under src/", () => {
+  const files = () => ["src", "packages"].flatMap((root) => typeScriptFiles(join(repoRoot, root)));
+
   it("pass a hostLoadProbe, so none builds the production probe and reads this host's memory", () => {
-    const files = ["src", "packages"].flatMap((root) => typeScriptFiles(join(repoRoot, root)));
-    const found = files
+    const found = files()
       .filter((path) => repoPath(path) !== "src/daemon/main.ts" && repoPath(path) !== PROBE_TESTS)
-      .flatMap(startsWithoutProbe);
+      .flatMap((path) => startsWithout(/\bhostLoadProbe\b/, path));
+
+    expect(found).toEqual([]);
+  });
+
+  it("pass a directoryAccess reader, so none starts PowerShell on Windows to read its data directory's ACL", () => {
+    const found = files()
+      .filter((path) => repoPath(path) !== "src/daemon/main.ts")
+      .flatMap((path) => startsWithout(/\bdirectoryAccess\b/, path));
 
     expect(found).toEqual([]);
   });
