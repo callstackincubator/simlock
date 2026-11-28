@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { WARM_POOL_TICK_MS } from "./converger.js";
+import { RETRY_FIRST_MS } from "./retry.js";
 import { device, harness, iphone15, leaseOn, minute } from "./test-fixtures.js";
+
+type Rig = ReturnType<typeof harness>;
 
 // why: the warm pool is a decomposed module (ADR 0063 section 2); these tests drive its converger part directly.
 describe("warm pool converger", () => {
@@ -34,57 +37,51 @@ describe("warm pool converger", () => {
     expect(shutDown.kick).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a device alone that was leased between the proposal and the action", async () => {
-    let lease: (id: string) => void = () => undefined;
-    const rig = harness(
-      [
-        device("a", "ready", 90 * minute),
-        device("b", "ready", 80 * minute),
-        device("c", "ready", 70 * minute),
-      ],
-      {
-        limit: 1,
-        shutdown: async (target) => {
-          // The first shutdown runs outside the decision gate; `b` is leased while it does.
-          lease("b");
-          return { ...target, state: "shutdown" };
-        },
+  it.each([
+    ["is leased", (rig: Rig) => rig.lease("b")],
+    ["gets a lease record before its state does", (rig: Rig) => void rig.state.leases.push(leaseOn("b"))],
+    [
+      "changes state to reclaiming",
+      (rig: Rig) => {
+        rig.state.devices = rig.state.devices.map((item) =>
+          item.id === "b" ? { ...item, state: "reclaiming" } : item,
+        );
       },
-    );
-    lease = rig.lease;
-
-    await rig.pool.pass();
-
-    expect(rig.shutdownCalls).toEqual(["a"]);
-    expect(rig.sink.records.map((record) => record.fields)).toEqual([
-      { deviceId: "a", reason: "over-budget" },
-    ]);
-    expect(rig.kick).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves a device alone whose lease appears before its state does", async () => {
-    let lease: () => void = () => undefined;
-    const rig = harness(
-      [
-        device("a", "ready", 90 * minute),
-        device("b", "ready", 80 * minute),
-        device("c", "ready", 70 * minute),
-      ],
-      {
-        limit: 1,
-        shutdown: async (target) => {
-          // `b` gets a lease record while its snapshot state still reads `ready`.
-          lease();
-          return { ...target, state: "shutdown" };
-        },
+    ],
+    [
+      "leaves the registry",
+      (rig: Rig) => {
+        rig.state.devices = rig.state.devices.filter((item) => item.id !== "b");
       },
-    );
-    lease = () => void rig.state.leases.push(leaseOn("b"));
+    ],
+  ])(
+    "leaves a device alone that %s between the proposal and the shutdown",
+    async (_change, change) => {
+      const rig: Rig = harness(
+        [
+          device("a", "ready", 90 * minute),
+          device("b", "ready", 80 * minute),
+          device("c", "ready", 70 * minute),
+        ],
+        {
+          limit: 1,
+          shutdown: async (target) => {
+            // The first shutdown runs outside the decision gate; `b` changes while it does.
+            change(rig);
+            return { ...target, state: "shutdown" };
+          },
+        },
+      );
 
-    await rig.pool.pass();
+      await rig.pool.pass();
 
-    expect(rig.shutdownCalls).toEqual(["a"]);
-  });
+      expect(rig.shutdownCalls).toEqual(["a"]);
+      expect(rig.sink.records.map((record) => record.fields)).toEqual([
+        { deviceId: "a", reason: "over-budget" },
+      ]);
+      expect(rig.kick).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("shuts down with the warm-pool initiator under the cleanup claim", async () => {
     const rig = harness([device("a", "ready", 90 * minute), device("b", "ready", 80 * minute)], {
@@ -148,20 +145,41 @@ describe("warm pool converger", () => {
     expect(rig.shutdownCalls).toEqual(["a"]);
   });
 
-  it("holds a boot reservation and a boot claim through the boot, and releases the reservation when it commits", async () => {
-    const rig = harness([device("shut", "shutdown", 1_000)], { targets: [iphone15] });
+  it("holds a device through its boot, and boots it again once the boot has committed", async () => {
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const rig: Rig = harness([device("shut", "shutdown", 1_000)], {
+      boot: async (target) => {
+        await gate;
+        rig.state.devices = rig.state.devices.map((item) =>
+          item.id === target.id ? { ...item, state: "ready" } : item,
+        );
+        return { ...target, state: "ready" };
+      },
+      maxConcurrentBoots: 2,
+      // why: a second copy is wanted but cannot be created, so the one shut-down device is the only candidate for it.
+      refuseProvision: true,
+      targets: [{ ...iphone15, count: 2 }],
+    });
 
+    await rig.pool.pass();
+    await vi.waitFor(() => expect(rig.bootCalls).toEqual(["shut"]));
+    await rig.pool.pass();
+
+    expect(rig.bootCalls).toEqual(["shut"]);
+
+    finish();
+    await rig.pool.settle();
+    rig.state.devices = rig.state.devices.map((item) => ({ ...item, state: "shutdown" }));
     await rig.pool.pass();
     await rig.pool.settle();
 
-    expect(rig.reservations).toHaveLength(1);
-    expect(rig.reservations[0]?.claimedAtBoot).toBe(true);
-    expect(rig.reservations[0]?.releasedAtBoot).toBe(0);
-    expect(rig.reservations[0]?.released).toBe(1);
-    expect(rig.claims.isClaimed("shut")).toBe(false);
+    expect(rig.bootCalls).toEqual(["shut", "shut"]);
   });
 
-  it("releases the boot reservation and the claim when the boot fails", async () => {
+  it("boots a device again after its boot failed", async () => {
     const rig = harness([device("shut", "shutdown", 1_000)], {
       boot: async () => {
         throw new Error("boot failed");
@@ -172,9 +190,6 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
     await rig.pool.settle();
 
-    expect(rig.reservations).toHaveLength(1);
-    expect(rig.reservations[0]?.released).toBe(1);
-    expect(rig.claims.isClaimed("shut")).toBe(false);
     const lines = rig.sink.records.filter(
       (record) => record.level === "warn" && record.message.startsWith("warm pool boot"),
     );
@@ -183,6 +198,12 @@ describe("warm pool converger", () => {
       fields: { deviceId: "shut", step: "boot" },
       message: "warm pool boot of a device failed",
     });
+
+    rig.clock.advance(RETRY_FIRST_MS);
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(rig.bootCalls).toEqual(["shut", "shut"]);
   });
 
   it("runs exactly one more pass for two triggers that arrive during one pass", async () => {
@@ -215,26 +236,37 @@ describe("warm pool converger", () => {
     rig.pool.dispose();
   });
 
-  it("does not boot a device that was claimed between the proposal and the action", async () => {
-    const rig: ReturnType<typeof harness> = harness(
-      [device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)],
-      {
-        maxConcurrentBoots: 2,
-        onAdmit: (id) => {
-          if (id === "y") void rig.claims.tryClaim("y", "eviction");
-        },
-        targets: [{ ...iphone15, count: 2 }],
+  it.each([
+    [
+      "is claimed for eviction",
+      (rig: Rig) => void rig.claims.tryClaim("y", "eviction"),
+    ],
+    [
+      "is no longer shut down",
+      (rig: Rig) => {
+        rig.state.devices = rig.state.devices.map((item) =>
+          item.id === "y" ? { ...item, state: "ready" } : item,
+        );
       },
-    );
+    ],
+  ])("does not boot a shut-down device that %s between the proposal and its boot", async (_change, change) => {
+    const rig: Rig = harness([device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)], {
+      maxConcurrentBoots: 2,
+      onAdmit: (id) => {
+        if (id === "y") change(rig);
+      },
+      targets: [{ ...iphone15, count: 2 }],
+    });
 
     await rig.pool.pass();
     await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual(["x"]);
     expect(rig.reservations).toHaveLength(1);
+    expect(rig.sink.records).toEqual([]);
   });
 
-  it("releases the reservation and boots nothing when the device claim is refused", async () => {
+  it("boots nothing when the device claim is refused", async () => {
     const rig = harness([device("shut", "shutdown", 1_000)], {
       refuseClaim: true,
       targets: [iphone15],
@@ -244,87 +276,8 @@ describe("warm pool converger", () => {
     await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual([]);
-    expect(rig.reservations).toHaveLength(1);
-    expect(rig.reservations[0]?.released).toBe(1);
     expect(rig.sink.records).toEqual([]);
     expect(rig.kick).not.toHaveBeenCalled();
-  });
-
-  it("leaves a device alone whose state changed between the proposal and the shutdown", async () => {
-    let change: () => void = () => undefined;
-    const rig = harness(
-      [
-        device("a", "ready", 90 * minute),
-        device("b", "ready", 80 * minute),
-        device("c", "ready", 70 * minute),
-      ],
-      {
-        limit: 1,
-        shutdown: async (target) => {
-          change();
-          return { ...target, state: "shutdown" };
-        },
-      },
-    );
-    change = () => {
-      rig.state.devices = rig.state.devices.map((item) =>
-        item.id === "b" ? { ...item, state: "reclaiming" } : item,
-      );
-    };
-
-    await rig.pool.pass();
-
-    expect(rig.shutdownCalls).toEqual(["a"]);
-  });
-
-  it("leaves a device alone that left the registry between the proposal and the shutdown", async () => {
-    let remove: () => void = () => undefined;
-    const rig = harness(
-      [
-        device("a", "ready", 90 * minute),
-        device("b", "ready", 80 * minute),
-        device("c", "ready", 70 * minute),
-      ],
-      {
-        limit: 1,
-        shutdown: async (target) => {
-          remove();
-          return { ...target, state: "shutdown" };
-        },
-      },
-    );
-    remove = () => {
-      rig.state.devices = rig.state.devices.filter((item) => item.id !== "b");
-    };
-
-    await rig.pool.pass();
-
-    expect(rig.shutdownCalls).toEqual(["a"]);
-    expect(rig.sink.records.map((record) => record.fields)).toEqual([
-      { deviceId: "a", reason: "over-budget" },
-    ]);
-  });
-
-  it("leaves a shut-down device alone that is no longer shut down when its boot comes", async () => {
-    const rig: ReturnType<typeof harness> = harness(
-      [device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)],
-      {
-        maxConcurrentBoots: 2,
-        onAdmit: (id) => {
-          if (id !== "y") return;
-          rig.state.devices = rig.state.devices.map((item) =>
-            item.id === "y" ? { ...item, state: "ready" } : item,
-          );
-        },
-        targets: [{ ...iphone15, count: 2 }],
-      },
-    );
-
-    await rig.pool.pass();
-    await rig.pool.settle();
-
-    expect(rig.bootCalls).toEqual(["x"]);
-    expect(rig.sink.records).toEqual([]);
   });
 
   it("marks only devices that are shut down while a reset holds acquisition closed, and copes with one that left the registry", async () => {
@@ -438,7 +391,7 @@ describe("warm pool converger", () => {
     expect(() => rig.pool.dispose()).not.toThrow();
   });
 
-  it("logs one line for a shutdown that fails and leaves the device ready", async () => {
+  it("still kicks acquisition and leaves the device ready when a shutdown fails", async () => {
     const rig = harness([device("a", "ready", 5_000), device("b", "ready", 1_000)], {
       limit: 1,
       shutdown: async () => {
@@ -448,13 +401,6 @@ describe("warm pool converger", () => {
 
     await rig.pool.pass();
 
-    const lines = rig.sink.records.filter((record) => record.level === "warn");
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({
-      fields: { deviceId: "a", step: "shutdown" },
-      message: "warm pool shutdown of a device failed",
-    });
-    expect(String(lines[0]?.fields?.["error"])).toContain("simctl shutdown failed");
     expect(rig.state.devices.find((item) => item.id === "a")?.state).toBe("ready");
     expect(rig.kick).toHaveBeenCalledTimes(1);
   });

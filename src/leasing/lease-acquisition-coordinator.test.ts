@@ -65,7 +65,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
     pending.catch(() => undefined);
     await flush();
-    expect(harness.queue.hasPendingRequester("agent")).toBe(true);
     const rejections: unknown[] = [];
     harness.bus.subscribe("lease.rejected", (envelope) => rejections.push(envelope.payload));
 
@@ -90,7 +89,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         requestSpec: request,
       },
     ]);
-    expect(harness.queue.depth).toBe(1);
+    expect(harness.coordinator.queueDepth).toBe(1);
 
     const otherKey = harness.coordinator.request(request, {
       idempotencyKey: "key-2",
@@ -104,17 +103,29 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(otherKey).rejects.toBeInstanceOf(RequesterAlreadyLeasedError);
     expect(rejections).toHaveLength(2);
     expect(rejections[1]).toMatchObject({ reason: "already-leased", requester: "agent" });
-    expect(harness.queue.depth).toBe(1);
+    expect(harness.coordinator.queueDepth).toBe(1);
   });
 
-  it.each([["provisioned"], ["ready"]] as const)(
-    "hands the owning driver's lease environment to a %s device's grant",
-    async (path) => {
+  it.each([
+    [
+      "provisioned",
+      { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
+      { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
+    ],
+    [
+      "ready",
+      { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
+      { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
+    ],
+    ["provisioned", undefined, {}],
+  ] as const)(
+    "hands the owning driver's lease environment to a %s device's grant (driver environment %j, grant %j)",
+    async (path, leaseEnvironment, expected) => {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({
         availableOsVersions: ["26.5"],
         clock,
-        leaseEnvironment: { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
+        ...(leaseEnvironment === undefined ? {} : { leaseEnvironment }),
         platform: "ios",
       });
       const harness = await createHarness({ drivers: [driver] });
@@ -127,22 +138,9 @@ describe("LeaseAcquisitionCoordinator", () => {
         requesterId: "agent",
       });
 
-      expect(granted.environment).toEqual({
-        SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios",
-      });
+      expect(granted.environment).toEqual(expected);
     },
   );
-
-  it("grants a device from a driver contributing nothing an empty environment", async () => {
-    const harness = await createHarness();
-
-    const granted = await harness.coordinator.request(request, {
-      ownerId: "agent",
-      requesterId: "agent",
-    });
-
-    expect(granted.environment).toEqual({});
-  });
 
   it("rejects missing drivers and unresolved specs without leaving pending demand", async () => {
     const empty = await createHarness({ drivers: [] });

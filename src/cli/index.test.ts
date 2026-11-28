@@ -39,7 +39,9 @@ describe("readLogFile", () => {
   it("propagates the read failure when neither file exists", async () => {
     const filesystem = new MemoryFilesystem();
 
-    await expect(readLogFile(filesystem, "/simlock/daemon.log")).rejects.toThrow();
+    await expect(readLogFile(filesystem, "/simlock/daemon.log")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 

@@ -30,8 +30,6 @@ describe("DaemonServer", () => {
     });
     expect(grant.ok).toBe(true);
     const leaseId = leaseIdOf(grant);
-    expect(harness.registry.snapshot.leases).toHaveLength(1);
-
     await holder.close();
 
     const observer = await createClient(harness.socketPath);
@@ -41,12 +39,10 @@ describe("DaemonServer", () => {
     });
 
     harness.clock.advance(40);
-    await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
     // why: a virtual device that ended a lease is deleted, never granted again (ADR 0061).
-    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("deleted");
-    await expect(observer.request("status.get", {})).resolves.toMatchObject({
-      payload: { devices: [{ state: "deleted" }] },
-    });
+    await expect
+      .poll(async () => (await observer.request("status.get", {})).payload)
+      .toMatchObject({ leases: [], devices: [{ state: "deleted" }] });
     await observer.close();
   });
 
@@ -65,8 +61,9 @@ describe("DaemonServer", () => {
       holder.request("lease.release", { leaseId: leaseIdOf(grant) }),
     ).resolves.toMatchObject({ ok: true });
 
-    await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
-    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("deleted");
+    await expect
+      .poll(async () => (await holder.request("status.get", {})).payload)
+      .toMatchObject({ leases: [], devices: [{ state: "deleted" }] });
     await holder.close();
   });
 
@@ -177,13 +174,20 @@ describe("DaemonServer", () => {
     await expect
       .poll(() => sink.records.some((record) => record.message === "Connection closed"))
       .toBe(true);
-    expect(harness.registry.snapshot.leases.map((lease) => lease.requesterId)).toEqual(["holder"]);
+    const observer = await createClient(harness.socketPath);
+    await hello(observer);
+    const holders = async () =>
+      (
+        (await observer.request("status.get", {})).payload as {
+          readonly leases: readonly { readonly requesterId: string }[];
+        }
+      ).leases.map((lease) => lease.requesterId);
+    expect(await holders()).toEqual(["holder"]);
 
     harness.clock.advance(40);
     await expect(queuedGrant).resolves.toMatchObject({ ok: true });
-    await expect
-      .poll(() => harness.registry.snapshot.leases.map((lease) => lease.requesterId))
-      .toEqual(["waiter"]);
+    await expect.poll(holders).toEqual(["waiter"]);
+    await observer.close();
   });
 
   it("keeps lease progress on its requesting connection", async () => {

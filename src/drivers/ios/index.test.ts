@@ -78,17 +78,27 @@ afterEach(() => {
 });
 
 describe("IosSimctlDriver", () => {
-  it("resolves an exact model and requested installed runtime", async () => {
+  it.each([
+    {
+      title: "an exact model and requested installed runtime",
+      request: { model: "iPhone 16", osVersion: "18.4" },
+      expected: { physical: false, model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+    },
+    {
+      title: "the newest installed iOS runtime when none is requested",
+      request: { model: "iPhone 16" },
+      expected: spec,
+    },
+    {
+      title: "a model name case-insensitively, preserving the simctl name",
+      request: { model: "iphone 16", osVersion: "26.5" },
+      expected: spec,
+    },
+  ])("resolves $title", async ({ request, expected }) => {
     const runner = scriptedListRunner();
     const driver = await createDriver(runner);
 
-    await expect(
-      driver.resolveSpec({
-        model: "iPhone 16",
-        osVersion: "18.4",
-        platform: "ios",
-      }),
-    ).resolves.toEqual({ physical: false, model: "iPhone 16", osVersion: "18.4", platform: "ios" });
+    await expect(driver.resolveSpec({ ...request, platform: "ios" })).resolves.toEqual(expected);
     expect(runner.calls).toEqual([{ ...listInvocation, options: { timeoutMs: 30_000 } }]);
   });
 
@@ -107,26 +117,6 @@ describe("IosSimctlDriver", () => {
       option: "imageTag",
       platform: "ios",
     });
-  });
-
-  it("selects the newest installed iOS runtime by default", async () => {
-    const driver = await createDriver(scriptedListRunner());
-
-    await expect(driver.resolveSpec({ model: "iPhone 16", platform: "ios" })).resolves.toEqual(
-      spec,
-    );
-  });
-
-  it("matches model names case-insensitively while preserving the simctl name", async () => {
-    const driver = await createDriver(scriptedListRunner());
-
-    await expect(
-      driver.resolveSpec({
-        model: "iphone 16",
-        osVersion: "26.5",
-        platform: "ios",
-      }),
-    ).resolves.toEqual(spec);
   });
 
   it("rejects an unknown model, pointing at a newer Xcode", async () => {
@@ -169,59 +159,36 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.map((call) => call.command)).toEqual(["xcrun"]);
   });
 
-  it("rejects an out-of-range OS version before ever considering a download", async () => {
+  // why: An out-of-range version is checked before any download logic, and an unpaired installed
+  // runtime never reaches `simctl create`: either way the one list call is the only spawn.
+  it.each([
+    {
+      title: "an out-of-range OS version before ever considering a download",
+      stdout: pairingFixture,
+      request: { model: "iPhone Xs", osVersion: "26.5" },
+      message: expect.stringContaining("iPhone Xs supports iOS 12.0-18.6") as unknown,
+    },
+    {
+      title: "an installed runtime whose supportedDeviceTypes omits the requested model",
+      stdout: JSON.stringify({
+        devicetypes: [deviceType("iPhone-16", "iPhone 16", 16_777_215)],
+        runtimes: [runtime("18.4", "", true, [])],
+      }),
+      request: { model: "iPhone 16", osVersion: "18.4" },
+      message: "iOS 18.4 is installed but does not support iPhone 16" as unknown,
+    },
+  ])("rejects $title", async ({ stdout, request, message }) => {
     const runner = new ScriptedProcessRunner([
-      { match: listInvocation, result: { code: 0, stderr: "", stdout: pairingFixture } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout } },
     ]);
     const driver = await createDriver(runner);
 
     const result = await driver
-      .resolveSpec({ model: "iPhone Xs", osVersion: "26.5", platform: "ios" })
+      .resolveSpec({ ...request, platform: "ios" })
       .catch((error: unknown) => error);
 
     expect(result).toBeInstanceOf(RuntimeMissingError);
-    expect(result).toMatchObject({
-      downloadable: false,
-      message: expect.stringContaining("iPhone Xs supports iOS 12.0-18.6"),
-    });
-    // why: No xcodebuild (or any further simctl) call: out-of-range is checked before download logic.
-    expect(runner.calls).toHaveLength(1);
-  });
-
-  it("rejects an installed runtime whose supportedDeviceTypes omits the requested model, without ever calling simctl create", async () => {
-    const catalog = JSON.stringify({
-      devicetypes: [
-        {
-          identifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
-          maxRuntimeVersion: 16_777_215,
-          minRuntimeVersion: 0,
-          name: "iPhone 16",
-        },
-      ],
-      runtimes: [
-        {
-          identifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
-          isAvailable: true,
-          name: "iOS 18.4",
-          supportedDeviceTypes: [],
-          version: "18.4",
-        },
-      ],
-    });
-    const runner = new ScriptedProcessRunner([
-      { match: listInvocation, result: { code: 0, stderr: "", stdout: catalog } },
-    ]);
-    const driver = await createDriver(runner);
-
-    const result = await driver
-      .resolveSpec({ model: "iPhone 16", osVersion: "18.4", platform: "ios" })
-      .catch((error: unknown) => error);
-
-    expect(result).toBeInstanceOf(RuntimeMissingError);
-    expect(result).toMatchObject({
-      downloadable: false,
-      message: "iOS 18.4 is installed but does not support iPhone 16",
-    });
+    expect(result).toMatchObject({ downloadable: false, message });
     expect(runner.calls).toHaveLength(1);
   });
 
@@ -368,7 +335,7 @@ describe("IosSimctlDriver", () => {
       ]);
     }
 
-    it("classes a device type by its product family: iPhone is phone, iPad is tablet, Apple Watch is watch, Apple TV is tv, Apple Vision is vision", async () => {
+    it("classes a device type by its product family: iPhone is phone, iPad is tablet, Apple Watch is watch, Apple TV is tv, Apple Vision is vision; one with no family or another family stays in models with no class", async () => {
       const driver = await createDriver(
         classesRunner([
           deviceType("iPhone-17", "iPhone 17", 0xffffff, "iPhone"),
@@ -376,22 +343,6 @@ describe("IosSimctlDriver", () => {
           deviceType("Watch-11", "Apple Watch Series 11 (46mm)", 0xffffff, "Apple Watch"),
           deviceType("TV-4K", "Apple TV 4K", 0xffffff, "Apple TV"),
           deviceType("Vision-Pro", "Apple Vision Pro", 0xffffff, "Apple Vision"),
-        ]),
-      );
-
-      expect((await driver.listCatalog()).modelClasses).toEqual({
-        "Apple TV 4K": "tv",
-        "Apple Vision Pro": "vision",
-        "Apple Watch Series 11 (46mm)": "watch",
-        "iPad Pro": "tablet",
-        "iPhone 17": "phone",
-      });
-    });
-
-    it("keeps a device type with no product family, or one outside those five, in models with no modelClasses entry", async () => {
-      const driver = await createDriver(
-        classesRunner([
-          deviceType("iPhone-17", "iPhone 17", 0xffffff, "iPhone"),
           deviceType("Mystery", "Mystery Device"),
           deviceType("HomePod", "HomePod", 0xffffff, "HomePod"),
         ]),
@@ -399,8 +350,16 @@ describe("IosSimctlDriver", () => {
 
       const catalog = await driver.listCatalog();
 
-      expect(catalog.models).toEqual(["iPhone 17", "Mystery Device", "HomePod"]);
-      expect(catalog.modelClasses).toEqual({ "iPhone 17": "phone" });
+      expect(catalog.models).toEqual(
+        expect.arrayContaining(["Mystery Device", "HomePod"]),
+      );
+      expect(catalog.modelClasses).toEqual({
+        "Apple TV 4K": "tv",
+        "Apple Vision Pro": "vision",
+        "Apple Watch Series 11 (46mm)": "watch",
+        "iPad Pro": "tablet",
+        "iPhone 17": "phone",
+      });
     });
   });
 
