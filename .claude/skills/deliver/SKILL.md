@@ -158,7 +158,7 @@ gh issue view <N> --json number,title,labels,assignees,body
 - Anything else, or assigned to someone else: stop and say why (rule 1).
 
 When a Done when line of an issue in the run needs the slow lane, and the
-run has no `no-hardware`: run the lane script's `check` (`toolchain.md`)
+run has no `no-hardware`: run the lane script's `check --fix` (`toolchain.md`)
 once, now. What it prints as unfit does not stop the run: say it in one
 line, so the machine can be fixed while the first build runs.
 

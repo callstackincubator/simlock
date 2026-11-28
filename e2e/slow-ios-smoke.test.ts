@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { IOS, withDaemon } from "./helpers/index.js";
+import { IOS, withDaemon, withinBudget } from "./helpers/index.js";
 import {
   iosDeviceSet,
   setDevices,
@@ -304,10 +304,11 @@ describe.skipIf(process.platform !== "darwin")(
             entry.event === "device.ready" &&
             (entry.payload as { deviceId?: string }).deviceId === secondGrant.device.id,
         );
-        expect(
-          (ready?.payload as { bootDuration?: number } | undefined)?.bootDuration,
-          "the second device is a copy of the seed, booted in under 30 s",
-        ).toBeLessThan(30_000);
+        withinBudget(
+          "the boot of the second device, a copy of the seed",
+          (ready?.payload as { bootDuration?: number } | undefined)?.bootDuration ?? Infinity,
+          30_000,
+        );
 
         await env.cli(["release", secondGrant.lease.id]);
         const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });

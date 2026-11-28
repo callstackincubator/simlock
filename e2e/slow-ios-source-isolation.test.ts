@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { withDaemon } from "./helpers/index.js";
+import { withDaemon, withinBudget } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import { sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
 import { DEVICE_READY_MS } from "./helpers/wait.js";
@@ -190,7 +190,11 @@ describe.skipIf(process.platform !== "darwin")(
 
         // why: case 5, a baseline's copy swaps in under 1 s, so a fall back to a full read is caught.
         for (const copy of copies) {
-          expect(await swapMilliseconds(env, copy.udid)).toBeLessThan(1000);
+          withinBudget(
+            `the swap of the baseline's copy ${copy.udid}`,
+            await swapMilliseconds(env, copy.udid),
+            1_000,
+          );
         }
       },
     );

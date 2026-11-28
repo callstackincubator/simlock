@@ -15,6 +15,7 @@ import {
   waitFor,
   waitForDeviceState,
   withHttpDaemon,
+  withinBudget,
 } from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -424,11 +425,11 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
             run.code,
             `CoreDevice ${version} is 642 or later, so the version is not what refused`,
           ).toBe(1);
-          const elapsed = Date.now() - started;
-          expect(
-            elapsed,
-            `CoreDevice ${version} found no device within the 25 s start bound`,
-          ).toBeLessThan(26_000);
+          withinBudget(
+            `CoreDevice ${version}: the exit for a UDID that is not there, past the 25 s start bound`,
+            Date.now() - started,
+            26_000,
+          );
           expect(lastLineOf(run.stderr)).toContain(unknown);
           expect(lastLineOf(run.stderr)).toMatch(/not connected/iu);
         }
@@ -468,10 +469,11 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
             resolve({ code: exitCode, signal: exitSignal }),
           );
         });
-        expect(
+        withinBudget(
+          "the device program's exit after its stdin closed",
           Date.now() - askedAt,
-          `the stop was not taken within 2 s, so the caller killed it: ${stderr}`,
-        ).toBeLessThan(2_000);
+          2_000,
+        );
         expect(
           ended.signal,
           `a stop the program was asked for is not a signal: ${stderr}`,
@@ -601,12 +603,17 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         const asked = Date.now();
         const response = await fetch(
           await deviceStreamUrl(daemon.base, daemon.env.home, grant.device.id),
-          { headers: daemon.auth, signal: AbortSignal.timeout(10_000) },
+          // why: twice the bound, the most the budget grows to, so the budget is what judges the time.
+          { headers: daemon.auth, signal: AbortSignal.timeout(20_000) },
         );
         // why: the status is read before any reader is taken; a 200's endless body is never read.
         const text = response.status === 200 ? "" : await response.text();
         expect(response.status, text).toBe(503);
-        expect(Date.now() - asked, "the refusal took longer than 10 s").toBeLessThan(10_000);
+        withinBudget(
+          "the stream's refusal on an iPhone too old to stream",
+          Date.now() - asked,
+          10_000,
+        );
         const refusal = JSON.parse(text) as { error?: { code?: string; message?: string } };
         expect(refusal.error?.code).toBe("STREAM_UNAVAILABLE");
         expect(refusal.error?.message).toContain("iOS 27");

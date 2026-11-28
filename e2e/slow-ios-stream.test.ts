@@ -12,6 +12,7 @@ import {
   readScreenFrames as readFrames,
   waitFor,
   withHttpDaemon,
+  withinBudget,
 } from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -166,10 +167,11 @@ describe.skipIf(process.platform !== "darwin")(
             "a still simulator's stream sent too few key frames",
           ).toBeGreaterThanOrEqual(3);
           const gaps = [...keyArrivals, Date.now()].slice(1).map((at, i) => at - keyArrivals[i]!);
-          expect(
+          withinBudget(
+            "a still simulator's longest time without a key frame",
             Math.max(...gaps.slice(0, -1)),
-            "a still simulator's stream went over 5.5 s without a key frame",
-          ).toBeLessThanOrEqual(5_500);
+            5_500,
+          );
           expect(
             [...opening, ...held].filter((frame) => frame.tag === TAG.meta).length,
             "a one-panel device's stream sent more than one meta frame",

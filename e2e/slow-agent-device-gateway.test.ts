@@ -33,6 +33,7 @@ import {
   waitForFree,
   warmUp,
   withSharedDaemon,
+  withinBudget,
   type Agent,
   type SharedTestEnv,
   type Target,
@@ -239,8 +240,13 @@ function defineSuite(target: Target): void {
       );
       const a = await agent("a");
       const startedAt = Date.now();
-      const result = await a.run(["open", "--platform", platform], { timeout: 5_000 });
-      expect(Date.now() - startedAt, "open took longer than 5 s").toBeLessThan(5_000);
+      // why: the run's own limit is twice the bound, the most the budget grows to, so the budget is what judges the time.
+      const result = await a.run(["open", "--platform", platform], { timeout: 10_000 });
+      withinBudget(
+        "open through a gateway with no agent-device worker",
+        Date.now() - startedAt,
+        5_000,
+      );
       expect(result.code, "open was accepted").not.toBe(0);
       expect(failureText(result)).toContain(NO_WORKER);
       expect(await listLeases(gateway)).toEqual([]);

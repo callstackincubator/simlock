@@ -41,6 +41,7 @@ import {
   succeeds,
   waitForFree,
   warmUp,
+  withinBudget,
   type Agent,
   type AgentDeviceResult,
   type RequestRow,
@@ -432,9 +433,10 @@ function defineSuite(target: Target): void {
       const result = await running.waitForExit(60_000);
       const exitedAt = Date.now();
       expect(result.code).toBe(0);
-      expect(releaseAt, "the wait ended before release --all was called").toBeLessThan(
-        exitedAt - 2_000,
-      );
+      expect(
+        exitedAt - releaseAt,
+        "the wait ended before release --all was called",
+      ).toBeGreaterThan(2_000);
       expect(exitedAt - startedAt).toBeGreaterThanOrEqual(20_000);
 
       await waitFor(
@@ -570,7 +572,11 @@ function defineSuite(target: Target): void {
             },
             { timeout: 60_000, interval: 1_000, label: "lease.expired for a's lease" },
           );
-          expect((expired as RecordedEvent).timestamp - lastCommandAt).toBeLessThanOrEqual(25_000);
+          withinBudget(
+            "lease.expired after the agent's last command",
+            (expired as RecordedEvent).timestamp - lastCommandAt,
+            25_000,
+          );
 
           ok(await open(b));
           expect(await listLeases(env)).toHaveLength(1);
@@ -611,8 +617,10 @@ function defineSuite(target: Target): void {
               )
               .map((event) => event.timestamp),
           );
-          expect((expired as RecordedEvent).timestamp).toBeLessThanOrEqual(
-            Math.max(lastRenewal + 20_000, answeredAt) + 5_000,
+          withinBudget(
+            "lease.expired after 20 s without a renewal, or after the answer",
+            (expired as RecordedEvent).timestamp - Math.max(lastRenewal + 20_000, answeredAt),
+            5_000,
           );
         },
       );
