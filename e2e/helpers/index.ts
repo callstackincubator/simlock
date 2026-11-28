@@ -11,6 +11,7 @@ export {
 } from "./agent-device.js";
 export type { Agent, AgentDeviceResult } from "./agent-device.js";
 export { freeLoopbackPort, holdLoopbackPort, startOnFreePort } from "./port.js";
+export { expectClipboardIsolated, writeClipboard } from "./clipboard.js";
 export { selectedInDeviceHub } from "./devicehub-selection.js";
 export { deviceStreamUrl } from "./device-stream.js";
 export { withHttpDaemon } from "./http-daemon.js";

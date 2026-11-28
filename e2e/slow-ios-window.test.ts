@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,11 +9,13 @@ import {
   DEVICE_READY_MS,
   SCREEN_TAGS as TAG,
   deviceStreamUrl,
+  expectClipboardIsolated,
   readScreenFrames as readFrames,
   selectedInDeviceHub,
   waitFor,
   withDaemon,
   withHttpDaemon,
+  writeClipboard,
 } from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -28,49 +30,6 @@ async function frontmostApp(): Promise<string> {
     "ObjC.import('AppKit'); $.NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.js",
   ]);
   return stdout.trim();
-}
-
-async function writeClipboard(command: string, args: string[], value: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["pipe", "ignore", "pipe"] });
-    let stderr = "";
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`${command} exited ${String(code)}: ${stderr}`)),
-    );
-    child.stdin.end(value);
-  });
-}
-
-async function expectClipboardIsolated(udid: string): Promise<void> {
-  const token = randomUUID();
-  const host = `host-${token}`;
-  const device = `device-${token}`;
-  await writeClipboard("pbcopy", [], host);
-  await writeClipboard("xcrun", ["simctl", "pbcopy", udid], device);
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  expect((await execFileAsync("pbpaste")).stdout, "device clipboard did not reach host").toBe(host);
-  expect(
-    (await execFileAsync("xcrun", ["simctl", "pbpaste", udid])).stdout,
-    "host clipboard did not reach device",
-  ).toBe(device);
-  const hostAgain = `host-again-${token}`;
-  await writeClipboard("pbcopy", [], hostAgain);
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  expect(
-    (await execFileAsync("xcrun", ["simctl", "pbpaste", udid])).stdout,
-    "host change did not reach device",
-  ).toBe(device);
-  const deviceAgain = `device-again-${token}`;
-  await writeClipboard("xcrun", ["simctl", "pbcopy", udid], deviceAgain);
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-  expect((await execFileAsync("pbpaste")).stdout, "device change did not reach host").toBe(
-    hostAgain,
-  );
 }
 
 describe.skipIf(process.platform !== "darwin")(
