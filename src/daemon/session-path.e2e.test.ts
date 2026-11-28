@@ -14,6 +14,7 @@ import { FakeClock, NodeFilesystem, NoopLogger, SystemClock } from "../ports/ind
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
+import { noRegistry } from "./test-main.js";
 import type { DaemonServer } from "./server.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
 
@@ -205,6 +206,7 @@ describe("the session path", () => {
         // why: the exec runs a real child process in the lease's folder, which has to exist.
         filesystem: new NodeFilesystem(),
         logger: new NoopLogger(),
+        npm: noRegistry(),
         version: "1.0.0-e2e",
       }),
     );

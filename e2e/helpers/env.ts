@@ -220,6 +220,9 @@ function processEnv(
   };
 }
 
+// why: the daemon's version check runs `npm view simlock@latest` at every start (`update.check` is on by default), and a lane daemon must not ask the registry (#1885).
+const NO_UPDATE_CHECK = { update: { check: false } } as const;
+
 // why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test gets neither unless it asks, and two daemons would clash on port 4701. A gateway keeps its HTTP, which it cannot do without.
 const STANDALONE_OFF: Record<string, unknown> = {
   capabilities: { "agent-device": { enabled: false } },
@@ -233,8 +236,8 @@ const STANDALONE_OFF: Record<string, unknown> = {
 function seedConfig(
   options: WithDaemonOptions,
   adbServerPort: number | undefined,
-): Record<string, unknown> | undefined {
-  const pinned = options.role === "gateway" ? {} : STANDALONE_OFF;
+): Record<string, unknown> {
+  const pinned = mergeDeep(NO_UPDATE_CHECK, options.role === "gateway" ? {} : STANDALONE_OFF);
   if (options.driver === undefined || options.driver === "fake") {
     return mergeDeep(mergeDeep(pinned, FAKE_LANE_BASE_CONFIG), options.configOverrides ?? {});
   }
@@ -244,9 +247,7 @@ function seedConfig(
       options.configOverrides ?? {},
     );
   }
-  return options.role === "gateway"
-    ? options.configOverrides
-    : mergeDeep(pinned, options.configOverrides ?? {});
+  return mergeDeep(pinned, options.configOverrides ?? {});
 }
 
 async function buildEnv(
@@ -265,11 +266,12 @@ async function buildEnv(
 
   const adbServerPort = options.driver === "real" ? await freeLoopbackPort() : undefined;
   if (keepSeeds) await putKeptSeedsBack(home, env, configPath, socketPath, adbServerPort);
-  const seededConfig = seedConfig(options, adbServerPort);
-  if (seededConfig !== undefined) {
-    await mkdir(dataDirectory, { recursive: true });
-    await writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
-  }
+  await mkdir(dataDirectory, { recursive: true });
+  await writeFile(
+    configPath,
+    `${JSON.stringify(seedConfig(options, adbServerPort), null, 2)}\n`,
+    "utf8",
+  );
 
   const backgroundProcesses = new Set<CliBackgroundHandle>();
   const mcpClients = new Set<McpClientHandle>();
