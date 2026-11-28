@@ -12,8 +12,16 @@ import {
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  NoopLogger,
+} from "../ports/index.js";
 import { seedTokensDatabase } from "../auth/testing.js";
+import { createModuleHost } from "../modules/index.js";
+import { fakeModuleTokens, fakeWorkerContext } from "../modules/testing.js";
 import { removeDirectory } from "../test-support/remove-directory.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
@@ -309,6 +317,32 @@ describe("the local agent-device profile", () => {
       };
       expect(written.daemonBaseUrl, host).toBe(`${origin}:${other.port}/v1/agent-device`);
     }
+  });
+
+  it("names a listen address that is no wildcard as it is", async () => {
+    // why: the module host alone, because a daemon cannot listen on an address the test machine does not have.
+    const { ctx } = await fakeWorkerContext("agent-device", {});
+    const definition = agentDeviceModuleWith({ upstream: new FakeAgentDevice() });
+    const host = await createModuleHost({
+      config: {
+        ...ctx.daemonConfig,
+        capabilities: { "agent-device": { command: "fake-agent-device", enabled: true } },
+        http: { ...ctx.daemonConfig.http, enabled: true, host: "192.0.2.20", port: 4701 },
+      },
+      context: ctx,
+      definitions: [definition],
+      logger: new NoopLogger(),
+      role: "worker",
+      tokens: fakeModuleTokens(),
+    });
+
+    await ctx.filesystem.mkdirp(ctx.dataDirectory);
+    await host.prepareLocalProfiles();
+
+    const path = join(ctx.dataDirectory, "agent-device-profile.json");
+    expect(JSON.parse(await ctx.filesystem.readFile(path))).toMatchObject({
+      daemonBaseUrl: "http://192.0.2.20:4701/v1/agent-device",
+    });
   });
 
   it("keeps the profile across a restart, and replaces a token that no longer verifies", async () => {

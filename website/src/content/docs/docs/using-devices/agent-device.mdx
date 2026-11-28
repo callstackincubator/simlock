@@ -181,6 +181,15 @@ agent-device close --session s1
 - A worker that has joined a gateway does not write the file.
 - The file's token is labelled `agent-device on this Mac`. Do not give your own tokens that label: the worker revokes them at its next start.
 
+### If the worker listens on one network address
+
+The file reaches the worker on this Mac's loopback when `http.host` is `127.0.0.1` (the default), `localhost`, `::1`, `0.0.0.0` or `::`. With one network address, such as `192.168.1.20`, the worker listens only there, so the file names that address over plain `http://`. agent-device 0.22+ refuses to send the token to it; 0.21.x warns.
+
+Do one of these:
+
+- Set `http.host` back to `127.0.0.1` and restart the daemon ([Change the address or port](/simlock/docs/worker/console-and-http#change-the-address-or-port)). Agents on other machines then connect through your HTTPS proxy on this Mac.
+- Keep the address, and set `AGENT_DEVICE_ALLOW_INSECURE_TRANSPORT=1` in the environment where the local agent runs `agent-device`. This allows plain `http://` to any host from those commands, not only to this Mac.
+
 ## Use a real phone
 
 `open --physical` leases an enrolled phone, and the reply names it with `physical: true`. See [Lease a real iPhone or Android phone](/simlock/docs/using-devices/lease-a-phone). Phones need setup on the worker:

@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 import { errorMessage } from "../shared/index.js";
 
+// why: HTTP listens on `host` alone, so only a wildcard bind is sure to answer on loopback; any other address is named as it is.
 function profileOrigin(host: string, port: number): string {
   const reachable = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   return `http://${reachable.includes(":") ? `[${reachable}]` : reachable}:${String(port)}`;
