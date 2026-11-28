@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -99,6 +100,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
     const logs = new MemoryLogSink();
     const starting = startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       clock,
       configOverrides:
         options.defaults === undefined

@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { type AddressInfo } from "node:net";
@@ -176,6 +177,7 @@ describe("a lease's input socket", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: {
           capabilities: { input: { enabled: options.gatewayInput } },
           http: { enabled: true, host: "127.0.0.1", port },
@@ -192,6 +194,7 @@ describe("a lease's input socket", () => {
       .secret;
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         capabilities: { input: { enabled: options.workerInput } },
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
@@ -246,6 +249,7 @@ describe("a lease's input socket", () => {
     const { port, started: worker } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         ...(clock === undefined ? {} : { clock }),
         configOverrides: {
           capabilities: { input: { enabled: true }, stream: { enabled: true } },

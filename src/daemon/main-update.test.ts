@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -56,6 +57,7 @@ describe("startDaemon version check", () => {
         drivers: [],
         filesystem: new MemoryFilesystem(),
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         logger: new JsonLinesLogger({ clock, level: "debug", sink }),
         npm,
         version: "0.3.0",
@@ -105,6 +107,7 @@ describe("startDaemon version check", () => {
           filesystem:
             refused === "admin.token" ? new SecretRefusingFilesystem() : new MemoryFilesystem(),
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           ipc: refused === "listen" ? new ListenRefusingTransport() : new MemoryIpcTransport(),
           logger: new NoopLogger(),
           npm,
@@ -165,6 +168,7 @@ describe("startDaemon version check", () => {
         drivers: [driver],
         filesystem: new MemoryFilesystem(),
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         ipc: new ListenFailingTransport(code),
         logger: new NoopLogger(),
         npm: new FakeNpmCli({ view: [{ ok: true, output: "0.3.0\n" }] }),
@@ -233,6 +237,7 @@ describe("startDaemon version check", () => {
         drivers: role === "gateway" ? [] : [driver],
         filesystem: new SecretWithheldFilesystem(),
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         ipc,
         logger: new JsonLinesLogger({ clock, level: "debug", sink }),
         npm: new FakeNpmCli({ view: [{ ok: true, output: "0.3.0\n" }] }),
@@ -457,6 +462,7 @@ describe("startDaemon gateway update", () => {
         drivers: [],
         filesystem,
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         logger: new NoopLogger(),
         npm: new FakeNpmCli({
           globalRoot: [{ ok: true, output: "/opt" }],

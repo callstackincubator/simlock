@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { hasEvent, historyEventsWhen } from "./test-main-history.js";
 import { queryState } from "./test-main-state.js";
 import { existsSync } from "node:fs";
@@ -256,6 +257,7 @@ describe("startDaemon wires core and leasing together", () => {
 
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -301,6 +303,7 @@ describe("startDaemon wires core and leasing together", () => {
 
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -326,6 +329,7 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         clock,
         configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
@@ -382,6 +386,7 @@ describe("startDaemon wires core and leasing together", () => {
     const options = () =>
       ({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         clock,
         configOverrides: STANDALONE_OFF,
         dataDirectory: directory,

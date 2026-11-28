@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { queryState } from "./test-main-state.js";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -106,6 +107,7 @@ describe("startDaemon state.db", () => {
           deviceDataTables: fakeDeviceDataTables,
           drivers: [],
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           version: "1.2.3",
         } as StartDaemonOptions),
       );

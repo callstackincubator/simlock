@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +63,7 @@ function gatewayOptions(
     dataDirectory: directory,
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
+    directoryAccess: fakeDirectoryAccess(),
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: modules,
     version: "1.2.3",
@@ -134,6 +136,7 @@ async function joinWorker(
     ],
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
+    directoryAccess: fakeDirectoryAccess(),
     optionalModules: modules,
     deviceDataTables: fakeDeviceDataTables,
     version: "1.2.3",

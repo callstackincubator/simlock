@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -201,6 +202,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const started = await startDaemon({
       clock,
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         ...(options.agentDevice === "unset"
           ? {}
@@ -256,6 +258,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       startDaemon({
         clock: workerClock,
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: {
           capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
           capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },

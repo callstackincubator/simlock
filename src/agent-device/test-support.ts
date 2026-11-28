@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,6 +165,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     startDaemon({
       clock,
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         ...(options.enabled === "unset"
           ? {}

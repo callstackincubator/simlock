@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -69,6 +70,7 @@ describe("device.rotate", () => {
     ];
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         capabilities: { input: { enabled: options.inputModule } },
         ...(options.gateway === undefined ? {} : { gateway: options.gateway }),
@@ -603,6 +605,7 @@ describe("device.rotate", () => {
       const { port: gatewayPort, started: gateway } = await startOnFreePort(async (gatewayPort) =>
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port: gatewayPort } },
           dataDirectory: gatewayDirectory,
           filesystem: new MemoryFilesystem(),

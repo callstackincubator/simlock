@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +40,7 @@ describe("a worker's capabilities through a gateway", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         role: "gateway",
         dataDirectory: gatewayDirectory,
@@ -59,6 +61,7 @@ describe("a worker's capabilities through a gateway", () => {
     directories.push(workerDirectory);
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         capabilities: { "agent-device": { enabled: options.enabled ?? true } },
         gateway: { label: "worker-a", token: secret, url: `ws://127.0.0.1:${String(port)}` },

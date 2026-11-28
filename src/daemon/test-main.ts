@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,6 +198,7 @@ export async function startGateway(
   const clock = new FakeClock(1_000);
   const { started: daemon } = await startOnFreePort((port) =>
     startDaemon({
+      directoryAccess: fakeDirectoryAccess(),
       hostLoadProbe: null,
       clock,
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },

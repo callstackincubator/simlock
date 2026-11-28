@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -126,6 +127,7 @@ describe("a lease's tunnel socket", () => {
     const { port, started: daemon } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: {
           capabilities: { tunnel: { enabled } },
           http: { enabled: true, host: "127.0.0.1", port },
@@ -180,6 +182,7 @@ describe("a lease's tunnel socket", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         ...clock,
         configOverrides: {
           capabilities: { input, tunnel: { enabled: options.gatewayTunnel } },
@@ -198,6 +201,7 @@ describe("a lease's tunnel socket", () => {
     const deviceTcp = new FakeDeviceTcp();
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       ...clock,
       configOverrides: {
         capabilities: { input, tunnel: { enabled: options.workerTunnel } },
@@ -553,6 +557,7 @@ describe("a lease's tunnel socket", () => {
       const start = async (deviceTcp: FakeDeviceTcp): Promise<DaemonServer> =>
         await startDaemon({
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           configOverrides: { http: { enabled: false } },
           dataDirectory: path,
           deviceDataTables: fakeDeviceDataTables,

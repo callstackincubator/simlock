@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { createCipheriv, createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { connect, createServer, type AddressInfo, type Socket } from "node:net";
@@ -167,6 +168,7 @@ export async function startWorker(
   const logger = new RecordingLogger();
   const options: StartDaemonOptions = {
     hostLoadProbe: null,
+    directoryAccess: fakeDirectoryAccess(),
     // why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a relay test asks for neither.
     configOverrides: {
       capabilities: { "agent-device": { enabled: false } },
@@ -343,6 +345,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const { port, started: gateway } = await startOnFreePort((candidate) =>
     startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         http: {
           enabled: true,
