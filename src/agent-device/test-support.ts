@@ -7,7 +7,13 @@ import { afterEach, expect } from "vitest";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeDirectoryAccessReader,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { seedTokensDatabase } from "../auth/testing.js";
 import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
 import { sleep } from "../daemon/test-relay-support.js";
@@ -164,6 +170,8 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const launch = (port: number) =>
     startDaemon({
       clock,
+      // why: on Windows the real reader would start PowerShell for every test daemon.
+      directoryAccess: new FakeDirectoryAccessReader({ user: "S-1-5-21-1-2-3-1001", entries: [] }),
       hostLoadProbe: null,
       directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
