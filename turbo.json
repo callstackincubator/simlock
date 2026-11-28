@@ -14,7 +14,14 @@
         "package.json",
         "pnpm-lock.yaml"
       ],
-      "outputs": ["dist/**", "!dist/ui/**", "!dist/vendor/**", "!dist/bin/**", "!dist/e2e/**"],
+      "outputs": [
+        "dist/**",
+        "!dist/ui/**",
+        "!dist/vendor/**",
+        "!dist/bin/**",
+        "!dist/jail/**",
+        "!dist/e2e/**"
+      ],
       "outputLogs": "new-only"
     },
     "//#build:ui:run": {
@@ -33,8 +40,13 @@
       "outputLogs": "new-only"
     },
     "//#build:capture:run": {
-      "inputs": ["vendor/**", "!vendor/screen-capture/.build/**", "scripts/build-capture.mjs"],
-      "outputs": ["dist/vendor/**", "dist/bin/**"],
+      "inputs": [
+        "vendor/**",
+        "!vendor/screen-capture/.build/**",
+        "src/drivers/ios/jail/**",
+        "scripts/build-capture.mjs"
+      ],
+      "outputs": ["dist/vendor/**", "dist/bin/**", "dist/jail/**"],
       "env": ["DEVELOPER_DIR"],
       "outputLogs": "new-only"
     },
