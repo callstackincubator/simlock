@@ -869,6 +869,16 @@ export class Seeds {
           timeoutMs: AVDMANAGER_TIMEOUT_MS,
         },
       );
+      // why: SDK tools 12 can write target=android-0 for dotted APIs; the emulator gates HVF on this value (https://android.googlesource.com/platform/external/qemu/+/emu-master-dev/android-qemu2-glue/main.cpp#2677).
+      const majorApiLevel = /^(\d+)\.\d+$/.exec(image.apiLevel)?.[1];
+      if (majorApiLevel !== undefined) {
+        const iniPath = join(folder, `${SEED_AVD_NAME}.ini`);
+        const ini = await this.#filesystem.readFile(iniPath);
+        await this.#filesystem.writeFileAtomic(
+          iniPath,
+          ini.replace(/^target=.*$/m, `target=android-${majorApiLevel}`),
+        );
+      }
       if (profile.kind === "properties") {
         await this.#avdConfig.applyHardwareProperties(avdFolder, profile.hardwareProperties);
       }
