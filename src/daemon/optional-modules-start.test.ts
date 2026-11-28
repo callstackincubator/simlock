@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -241,6 +242,7 @@ describe("optional modules: afterSocketClaimed", () => {
       ) =>
         ({
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           clock: new FakeClock(1_000),
           configOverrides: { capabilities: { alpha: { enabled: true } }, http: { enabled: false } },
           dataDirectory: directory,

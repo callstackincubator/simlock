@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { existsSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -47,6 +48,7 @@ async function startOnClock(overrides: Partial<StartDaemonOptions> = {}) {
   temporaryDirectories.push(directory);
   const clock = new FakeClock(1_000);
   const daemon = await startDaemon({
+    directoryAccess: fakeDirectoryAccess(),
     configOverrides: STANDALONE_OFF,
     deviceDataTables: fakeDeviceDataTables,
     clock,
@@ -94,6 +96,7 @@ describe("startDaemon host load", () => {
     const clock = new FakeClock(1_000);
     const socketPath = resolveDaemonSocketPath(directory);
     const startPromise = startDaemon({
+      directoryAccess: fakeDirectoryAccess(),
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -244,6 +247,7 @@ describe("startDaemon host load", () => {
       const clock = new FakeClock(1_000);
       await expect(
         startDaemon({
+          directoryAccess: fakeDirectoryAccess(),
           clock,
           configOverrides: STANDALONE_OFF,
           dataDirectory: directory,
@@ -298,6 +302,7 @@ describe("startDaemon in gateway mode host load", () => {
     // why: the gateway helper passes no probe by building none, and this test needs the daemon's own default.
     const { started: daemon } = await startOnFreePort((port) =>
       startDaemon({
+        directoryAccess: fakeDirectoryAccess(),
         clock,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         role: "gateway",
@@ -330,6 +335,7 @@ describe("startDaemon in gateway mode host load", () => {
       await expect(
         startOnFreePort((port) =>
           startDaemon({
+            directoryAccess: fakeDirectoryAccess(),
             clock,
             configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
             role: "gateway",

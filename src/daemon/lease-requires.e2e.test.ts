@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,6 +58,7 @@ describe("lease.request requires, through a gateway", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         role: "gateway",
         dataDirectory: directory,
@@ -88,6 +90,7 @@ describe("lease.request requires, through a gateway", () => {
     if (options.capability === "unavailable") fake.setUnavailable("down");
     const daemon = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         capabilities: { "agent-device": { enabled: options.capability !== "off" } },
         capacity: { config: { maxRunning: options.maxRunning ?? 2 }, strategy: "fixed" },

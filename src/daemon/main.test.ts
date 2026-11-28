@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -278,6 +279,7 @@ describe("the version a daemon reports", () => {
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
       socketPath,
     });
@@ -307,6 +309,7 @@ describe("startDaemon startup readiness", () => {
     const socketPath = resolveDaemonSocketPath(directory);
     const startPromise = startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       clock,
       configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
@@ -402,6 +405,7 @@ describe("startDaemon HTTP status for a quarantined device", () => {
         drivers: [driver],
         filesystem,
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         version: "1.2.3",
       } as StartDaemonOptions),
     );
@@ -492,6 +496,7 @@ describe("daemon role (ADR 0034)", () => {
       const { started: daemon } = await startOnFreePort((port) =>
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           drivers: [],
           deviceDataTables: fakeDeviceDataTables,

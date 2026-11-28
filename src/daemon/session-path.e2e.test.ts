@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -184,6 +185,7 @@ describe("the session path", () => {
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         ...(clock === undefined ? {} : { clock }),
         configOverrides: {
           // why: the default capacity derives from the host's CPUs, and a 4-CPU runner allows one Android device while this file holds two leases at once.

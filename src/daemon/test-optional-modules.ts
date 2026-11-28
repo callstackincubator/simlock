@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -124,6 +125,7 @@ export async function prepare(options: RigOptions, port?: number) {
     drivers: [driver],
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
+    directoryAccess: fakeDirectoryAccess(),
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: options.modules,
     socketPath: resolveDaemonSocketPath(directory),

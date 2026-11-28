@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,6 +66,7 @@ describe("startDaemon stopped while starting", () => {
       deviceDataTables: fakeDeviceDataTables,
       filesystem,
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       socketPath,
       version: "1.2.3",
     });
@@ -103,6 +105,7 @@ describe("startDaemon HTTP gateway startup readiness", () => {
       const sink = new MemoryLogSink();
       const startPromise = startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         clock,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
@@ -500,6 +503,7 @@ describe("startDaemon stop with a warm target", () => {
         sink,
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           deviceDataTables: fakeDeviceDataTables,
           clock,
           configOverrides: {
@@ -551,6 +555,7 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
       try {
         const startPromise = startDaemon({
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           clock,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
@@ -618,6 +623,7 @@ describe("startDaemon socket race with HTTP enabled", () => {
     const options = (port: number): StartDaemonOptions =>
       ({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         clock: new FakeClock(1_000),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
@@ -673,6 +679,7 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
     const options = (gatewayUrl?: string): StartDaemonOptions =>
       ({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         clock: new FakeClock(1_000),
         configOverrides:
           gatewayUrl === undefined
@@ -736,6 +743,7 @@ describe("startDaemon HTTP gateway bind failure", () => {
       await expect(
         startDaemon({
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           clock,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
@@ -776,6 +784,7 @@ describe("startDaemon HTTP gateway bind failure", () => {
           deviceDataTables: fakeDeviceDataTables,
           filesystem: new MemoryFilesystem(),
           hostLoadProbe: null,
+          directoryAccess: fakeDirectoryAccess(),
           logger,
           role,
           version: "1.2.3",

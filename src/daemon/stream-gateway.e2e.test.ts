@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,6 +80,7 @@ describe("a screen stream through a gateway", () => {
     const { port, started: gateway } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: {
           http: { enabled: true, host: "127.0.0.1", port },
           capabilities: { stream: { enabled: true } },
@@ -101,6 +103,7 @@ describe("a screen stream through a gateway", () => {
     const screen = paintingScreen();
     const worker = await startDaemon({
       hostLoadProbe: null,
+      directoryAccess: fakeDirectoryAccess(),
       configOverrides: {
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
         capabilities: { stream: { enabled: workerStreams } },
@@ -276,6 +279,7 @@ describe("a lease stream on a standalone worker", () => {
     const { port, started: worker } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: {
           capabilities: { stream: { enabled: streamEnabled } },
           http: { enabled: true, host: "127.0.0.1", port },

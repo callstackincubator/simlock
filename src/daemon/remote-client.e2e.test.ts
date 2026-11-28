@@ -1,3 +1,4 @@
+import { fakeDirectoryAccess } from "../test-support/directory-access.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +36,7 @@ describe("the typed client over a worker's session path", () => {
     const { port, started } = await startOnFreePort(async (port) =>
       startDaemon({
         hostLoadProbe: null,
+        directoryAccess: fakeDirectoryAccess(),
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
         deviceDataTables: fakeDeviceDataTables,
