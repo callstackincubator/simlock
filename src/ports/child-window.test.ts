@@ -150,3 +150,52 @@ describe("a child that outlives its caller is detached on every platform, and on
     },
   );
 });
+
+/**
+ * why: `conhost.exe --headless` reads its stdin as the console's input and exits at once, exit 0,
+ * when that input ends; Node's `"ignore"` hands a child the NUL device, which ends before it is
+ * read, so conhost never starts the program it was given and Simlock's adb server and every
+ * emulator never run (#1920). conhost cannot run off Windows, so this checks the stdio `spawn`
+ * hands Node with the platform set.
+ */
+describe("a child under conhost --headless that logs to a file gets a stdin that stays open", () => {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  let directory: string | undefined;
+
+  afterEach(async () => {
+    if (original !== undefined) Object.defineProperty(process, "platform", original);
+    vi.mocked(spawn).mockClear();
+    if (directory !== undefined) await rm(directory, { force: true, recursive: true });
+    directory = undefined;
+  });
+
+  it.each([
+    ["win32", "the adb server's", "pipe", { outlivesCaller: true }],
+    ["win32", "an emulator's", "pipe", { killChildren: true, outlivesCaller: true }],
+    ["win32", "a short-lived child's", "ignore", { outlivesCaller: false }],
+    ["darwin", "the adb server's", "ignore", { outlivesCaller: true }],
+    ["linux", "an emulator's", "ignore", { killChildren: true, outlivesCaller: true }],
+  ] as const)("on %s, %s options give stdin %s", async (platform, _caller, stdin, options) => {
+    directory = await mkdtemp(join(tmpdir(), "simlock-child-stdin-"));
+    const file = join(directory, "child.log");
+    Object.defineProperty(process, "platform", { value: platform });
+    if (platform === "win32" && options.outlivesCaller) {
+      // why: conhost.exe does not exist off Windows; the quiet program stands in for it.
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      vi.mocked(spawn).mockImplementationOnce(((
+        _command: string,
+        _args: string[],
+        spawnOptions: object,
+      ) => actual.spawn(...quiet, spawnOptions)) as unknown as typeof spawn);
+    }
+
+    await new NodeProcessRunner().spawn(...quiet, { ...options, stdio: { file } }).wait();
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ stdio: [stdin, expect.any(Number), expect.any(Number)] }),
+    );
+  });
+});
