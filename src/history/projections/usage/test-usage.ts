@@ -40,6 +40,7 @@ export interface RigOptions {
   readonly metricsRetention?: number;
   readonly projections?: readonly HistoryProjectionDefinition[];
   readonly start?: boolean;
+  readonly rebuildBatch?: number;
 }
 
 export interface Rig {
@@ -79,6 +80,7 @@ export async function rig(options: RigOptions = {}): Promise<Rig> {
     },
     projections: options.projections ?? [USAGE_PROJECTION],
     sqlite: new NodeSqliteOpener(),
+    ...(options.rebuildBatch === undefined ? {} : { rebuildBatch: options.rebuildBatch }),
   });
   if (options.start !== false) await history.start();
   let relayed = 0;

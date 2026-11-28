@@ -115,6 +115,50 @@ describe("usage projection: rebuild", () => {
   const breakMinuteTable = (path: string) =>
     execOn(path, "ALTER TABLE minute_rows DROP COLUMN knownMs");
 
+  it("a rebuild given rebuildBatch 10 replays 25 events in three batches of 10, 10 and 5, each in its own turn of the event loop", async () => {
+    // why: the three tests below need three batches, so at the default batch of 1,000 each writes 2,100 events, one transaction each (#1911).
+    let turn = 0;
+    const turns: number[] = [];
+    const recorded = (check: boolean): HistoryProjectionDefinition => ({
+      check: () => check,
+      create: () => ({
+        apply: () => {
+          if (!check) turns.push(turn);
+        },
+        prune: () => undefined,
+        rebuild: () => undefined,
+      }),
+      migrations: [],
+      name: "recorded",
+      version: 1,
+    });
+    const first = await rig({ projections: [recorded(true)] });
+    for (let index = 0; index < 25; index += 1)
+      first.emit("lease.requested", requested(`R${index}`));
+    await first.history.stop();
+
+    const second = await rig({
+      at: T0 + MIN,
+      directory: first.directory,
+      projections: [recorded(false)],
+      rebuildBatch: 10,
+      start: false,
+    });
+    let ticking = true;
+    const tick = (): void => {
+      turn += 1;
+      if (ticking) setImmediate(tick);
+    };
+    setImmediate(tick);
+    await second.history.start();
+    ticking = false;
+
+    const batches = [...new Set(turns)].map((at) => turns.filter((other) => other === at).length);
+    expect(second.history.status().rebuiltAt).toBe(T0 + MIN);
+    expect(batches).toEqual([10, 10, 5]);
+    await second.history.stop();
+  });
+
   it("a failed check rebuilds in batches with other work running between them: rows older than the oldest event are kept, the rest equal the live rows, an event emitted mid-rebuild is projected once, and status() gives rebuiltAt after; a start with nothing to fix gives neither field", async () => {
     const first = await rig({ eventRetention: DAY });
     first.at(T0 - 2 * DAY);
